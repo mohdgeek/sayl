@@ -130,6 +130,10 @@ def patch_aria2():
         import yt_dlp.downloader.external as ext
 
         class SaylAria2c(ext.Aria2cFD):
+            @classmethod
+            def get_basename(cls):
+                return "aria2c"
+
             def _call_process(self, cmd, info_dict):
                 flags = 0x08000000 if os.name == "nt" else 0
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -154,6 +158,12 @@ def patch_aria2():
                     if proc.poll() is None:
                         proc.kill()
                     proc.wait()
+                if proc.returncode:
+                    try:
+                        from .setup_tools import log as _syslog
+                        _syslog("aria2c رمز الخروج %s: %s" % (proc.returncode, " | ".join(tail[-6:])[:600]))
+                    except Exception:  # noqa: BLE001
+                        pass
                 return "", "\n".join(tail[-5:]), proc.returncode
 
         ext._BY_NAME["aria2c"] = SaylAria2c
@@ -310,6 +320,7 @@ class MediaDownload:
         self._seen = {}            # format_id -> [بايتات منزَّلة, الإجمالي]
         self._est = {}             # format_id -> الحجم التقديري من المعلومات
         self._no_aria = False
+        self._tmp = None
         self._order = []
         self._frac = 0.0
         self._stop = threading.Event()
@@ -465,10 +476,39 @@ class MediaDownload:
         opts.update(js_runtime_opts())
         if clients:
             opts["extractor_args"] = {"youtube": {"player_client": clients}}
+        self._tmp = None
         ar = None if self._no_aria else aria2_path()
         if ar and patch_aria2():
-            opts["external_downloader"] = {"http": ar, "https": ar}   # اتصالات متوازية: أسرع بكثير
+            # aria2c على ويندوز لا يتعامل جيدًا مع المسارات العربية: نحمّل في مجلد مؤقت بأسماء لاتينية
+            # ثم ننقل الملف بعنوانه الحقيقي إلى مجلد الحفظ.
+            tmp = os.path.join(os.path.expanduser("~"), ".sayl", "tmp", self.id)
+            if tmp.isascii():
+                os.makedirs(tmp, exist_ok=True)
+                self._tmp = tmp
+                opts["outtmpl"] = os.path.join(tmp, "%(id).30B.%(ext)s")
+                opts["external_downloader"] = {"http": ar, "https": ar}   # اتصالات متوازية: أسرع بكثير
         return opts
+
+    def _move_from_tmp(self, path, info):
+        """ينقل الملف (وترجماته) من المجلد المؤقت إلى مجلد الحفظ بالاسم الأصلي ويعيد المسار الجديد."""
+        tmp, out_dir = self._tmp, self._out_dir()
+        os.makedirs(out_dir, exist_ok=True)
+        stem, ext = os.path.splitext(os.path.basename(path))
+        base = f"{sanitize_filename(info.get('title') or 'video')[:150]} [{str(info.get('id', ''))[:20]}]"
+        final = None
+        for n in sorted(os.listdir(tmp)):
+            if not n.startswith(stem) or n.endswith((".part", ".ytdl")):
+                continue
+            dest = os.path.join(out_dir, base + n[len(stem):])
+            k = 1
+            while os.path.exists(dest):                       # لا نكتب فوق ملف موجود
+                dest = os.path.join(out_dir, f"{base} ({k}){n[len(stem):]}")
+                k += 1
+            shutil.move(os.path.join(tmp, n), dest)
+            if n == stem + ext:
+                final = dest
+        shutil.rmtree(tmp, ignore_errors=True)
+        return final or path
 
     def _attempt_all(self, log):
         yt = "youtu" in self.url
@@ -495,8 +535,9 @@ class MediaDownload:
                     break
                 if self.subs and "subtitle" in text:
                     self.subs = []              # فشل الترجمة (مثل 429) لا يُفشل الفيديو
-                elif not self._no_aria and "aria2" in text:
+                elif not self._no_aria and self._tmp is not None and ("exited with code" in text or "aria2" in text):
                     self._no_aria = True        # تعذّر المحمّل المتوازي: ارجع إلى المحمّل العادي
+                    shutil.rmtree(self._tmp, ignore_errors=True)
                 elif any(t in text for t in _RETRY_ERR):
                     i += 1
                 else:
@@ -529,6 +570,8 @@ class MediaDownload:
             path = rd[0].get("filepath") if rd else None
             if self._stop.is_set():
                 raise DownloadCancelled()
+            if path and os.path.exists(path) and self._tmp:
+                path = self._move_from_tmp(path, info)
             if path and os.path.exists(path):
                 self.filename = os.path.basename(path)
                 self.final_dir = os.path.dirname(path)
