@@ -31,7 +31,7 @@ TITLES.update({k: l for k, _, l in CAT_NAV})
 class Bridge(QObject):
     added = Signal(str)          # من خيط الخادم إلى خيط الواجهة
     hashed = Signal(str, str)    # (اسم الملف، SHA-256)
-    confirm = Signal(str, object, str)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
+    confirm = Signal(str, object, str, object)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
 
 
 def looks_downloadable(text):
@@ -557,13 +557,13 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is not box.button(QMessageBox.Cancel):
                 power.shutdown(0)
 
-    def open_confirm(self, url, headers, kind):
+    def open_confirm(self, url, headers, kind, preset):
         """طلب من الإضافة: أظهر النافذة لاختيار الجودة والمجلد قبل التحميل."""
         self.show_normal()
-        self.open_add(urls=url, video=(kind == "media"), headers=headers)
+        self.open_add(urls=url, video=(kind == "media"), headers=headers, preset=preset)
 
-    def open_add(self, urls="", video=False, headers=None):
-        dlg = AddDialog(self.config, self, urls=urls, video=video)
+    def open_add(self, urls="", video=False, headers=None, preset=None):
+        dlg = AddDialog(self.config, self, urls=urls, video=video, preset=preset)
         if dlg.exec():
             v = dlg.values()
             errors = []
@@ -721,7 +721,7 @@ def main():
     bridge.confirm.connect(win.open_confirm)
     try:
         server, moved = start_server(manager, config, on_add=lambda d: bridge.added.emit(d.id),
-                                   on_confirm=lambda u, h, k: bridge.confirm.emit(u, h, k))
+                                   on_confirm=lambda u, h, k, o: bridge.confirm.emit(u, h, k, o))
         if moved:
             manager.events.append(f"المنفذ {server.wanted_port} مشغول بنسخة أخرى من سيل أو برنامج آخر، "
                                   f"فاستخدمنا {server.port}. أغلق النسخ القديمة من مدير المهام.")

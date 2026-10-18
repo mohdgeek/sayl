@@ -139,7 +139,7 @@ def test_playlist_detection_and_probe(monkeypatch):
         def __init__(self, o): pass
         def __enter__(self): return self
         def __exit__(self, *a): pass
-        def extract_info(self, url, download=False):
+        def extract_info(self, url, download=False, **kw):
             return {"_type": "playlist", "title": "P", "entries": [
                 {"url": "https://v.test/1", "title": "one"}, None, {"id": "zz", "ie_key": "Youtube", "title": "two"}]}
 
@@ -393,7 +393,7 @@ def test_probe_and_confirm_api(tmp_path, monkeypatch):
     got = []
     monkeypatch.setattr(media, "probe", lambda url, headers=None, max_entries=300: {
         "title": "T", "duration": 5, "heights": [1080, 720], "playlist": False})
-    api = ApiServer(mgr, cfg, on_confirm=lambda u, h, k: got.append((u, k)))
+    api = ApiServer(mgr, cfg, on_confirm=lambda u, h, k, o: got.append((u, k)))
     api.start()
     base, h = f"http://127.0.0.1:{api.port}", {"X-Sayl-Token": cfg["token"]}
     try:
@@ -426,3 +426,40 @@ def test_media_progress_total_is_stable(tmp_path):
     d._hook({"info_dict": {"format_id": "a"}, "status": "finished", "downloaded_bytes": 20_000_000})
     d._hook({"info_dict": {"format_id": "v"}, "downloaded_bytes": 300_000_000, "total_bytes": 590_000_000})
     assert d.downloaded == 320_000_000 and d.size == 610_000_000
+
+
+def test_subtitles_overlap_removed_and_order():
+    src = ("WEBVTT\n\n"
+           "00:00:34.000 --> 00:00:38.000 align:start\nليه للاسف ما بقاش يشتغل\n\n"
+           "00:00:36.000 --> 00:00:40.000 align:start\nاللي هو 10 على ايامها\n")
+    out = media.clean_subtitle_text(src)
+    assert "00:00:34.000 --> 00:00:36.000" in out and "00:00:36.000 --> 00:00:40.000" in out
+    assert out.index("ليه") < out.index("اللي") and out.startswith("WEBVTT")
+
+
+def test_probe_cache_is_reused_for_download(tmp_path):
+    import functools, http.server, threading
+    root = tmp_path / "w"
+    root.mkdir()
+    (root / "v.mp4").write_bytes(b"\0" * 100000)
+    h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+    h.log_message = lambda *a: None
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/v.mp4"
+    media._INFO.clear()
+    info = media.probe(url)
+    assert info["title"] and media._cache_get(url) is not None
+    calls = []
+    orig = media.yt_dlp.YoutubeDL.extract_info
+    media.yt_dlp.YoutubeDL.extract_info = lambda self, *a, **k: calls.append(1) or orig(self, *a, **k)
+    try:
+        from sayl.engine import RateLimiter
+        d = media.MediaDownload(url, str(tmp_path / "o"), limiter=RateLimiter(0))
+        d._no_aria = True
+        d._run()
+    finally:
+        media.yt_dlp.YoutubeDL.extract_info = orig
+        srv.shutdown()
+    assert d.state == "completed", d.error
+    assert calls == []          # لم يُعد الفحص: استُعمل الكاش

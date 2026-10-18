@@ -52,27 +52,52 @@ def js_runtime_opts():
     return opts
 
 
+def _ts(t):
+    import re
+    mt = re.match(r"\s*(?:(\d+):)?(\d+):(\d+)[,.](\d+)", t)
+    if not mt:
+        return None
+    h, mi, s, ms = mt.groups()
+    return int(h or 0) * 3600 + int(mi) * 60 + int(s) + int(ms.ljust(3, "0")[:3]) / 1000
+
+
+def _fmt_ts(x, comma):
+    x = max(0.0, x)
+    ms = int(round((x - int(x)) * 1000))
+    s = int(x) % 60
+    return "%02d:%02d:%02d%s%03d" % (int(x) // 3600, int(x) // 60 % 60, s, "," if comma else ".", ms)
+
+
 def clean_subtitle_text(text):
-    """ترجمات يوتيوب التلقائية «متدحرجة»: كل مقطع يكرر السطر السابق ثم يضيف الجديد، فيظهر سطران مكدّسان.
-    نُبقي السطر الجديد فقط (حذف ما ظهر في المقطع السابق) فيظهر سطر واحد بترتيب صحيح."""
+    """ترجمات يوتيوب التلقائية: (1) «متدحرجة»: كل مقطع يكرر السطر السابق ثم الجديد، فنُبقي الجديد فقط.
+    (2) المقاطع تتداخل زمنيًا فيعرضها المشغّل مكدّسة والأحدث فوق الأقدم، فنقصّ نهاية كل مقطع عند بداية التالي.
+    النتيجة: سطر واحد في كل لحظة وبترتيب صحيح."""
     import re
     blocks = re.split(r"\r?\n\r?\n+", text.strip("\ufeff\r\n") + "\n")
-    out, prev, n = [], [], 0
+    head, cues, prev = [], [], []
     for b in blocks:
         lines = b.splitlines()
         ti = next((i for i, l in enumerate(lines) if "-->" in l), None)
         if ti is None:
-            out.append(b)          # ترويسة WEBVTT وما شابه
+            head.append(b)         # ترويسة WEBVTT وما شابه
             continue
+        a_, _, rest = lines[ti].partition("-->")
+        end_txt = rest.strip().split(" ")[0]
+        start, end = _ts(a_), _ts(end_txt)
+        extra = rest.strip()[len(end_txt):]
         body = [re.sub(r"<[^>]+>", "", l).strip() for l in lines[ti + 1:]]
         body = [l for l in body if l]
         new = [l for l in body if l not in prev] or ([] if body == prev else body)
         prev = body or prev
-        if not new:
-            continue
-        n += 1
-        head = [str(n)] if lines and lines[0].strip().isdigit() else []
-        out.append("\n".join(head + [lines[ti]] + new))
+        if new and start is not None and end is not None:
+            cues.append([start, end, new, "," in a_ + end_txt, extra])
+    for i in range(len(cues) - 1):
+        if cues[i + 1][0] < cues[i][1]:
+            cues[i][1] = max(cues[i][0] + 0.05, cues[i + 1][0])
+    out = list(head)
+    for n, (s, e, lines, comma, extra) in enumerate(cues, 1):
+        t = f"{_fmt_ts(s, comma)} --> {_fmt_ts(e, comma)}{extra}"
+        out.append("\n".join(([str(n)] if comma else []) + [t] + lines))
     return "\n\n".join(out) + "\n"
 
 
@@ -242,6 +267,20 @@ def _entry_url(e):
     return None
 
 
+_INFO = {}
+
+
+def _cache_put(url, info):
+    _INFO[url] = (time.time(), info)
+    for k in [k for k, (t, _) in _INFO.items() if time.time() - t > 900]:
+        _INFO.pop(k, None)
+
+
+def _cache_get(url):
+    hit = _INFO.get(url)
+    return hit[1] if hit and time.time() - hit[0] < 900 else None
+
+
 def probe(url, headers=None, max_entries=300):
     """يفحص الرابط دون تحميل: فيديو واحد (العنوان والمدة والجودات) أو قائمة تشغيل (العناصر)."""
     if yt_dlp is None:
@@ -254,9 +293,11 @@ def probe(url, headers=None, max_entries=300):
     opts.update(js_runtime_opts())
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=False, process=bool(pl))
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(log.last_error or str(e)[:300]) from e
+    if info.get("_type") != "playlist" and info.get("formats"):
+        _cache_put(url, info)          # التحميل لاحقًا يعيد استعماله فيبدأ فورًا بدل فحص جديد
     if info.get("_type") == "playlist":
         entries = []
         for e in info.get("entries") or []:
@@ -550,7 +591,16 @@ class MediaDownload:
     def _attempt(self, opts):
         if True:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(self.url, download=False)
+                info = None
+                cached = _cache_get(self.url)
+                if cached is not None:
+                    try:
+                        import copy
+                        info = ydl.process_ie_result(copy.deepcopy(cached), download=False)
+                    except Exception:  # noqa: BLE001
+                        info = None
+                if info is None:
+                    info = ydl.extract_info(self.url, download=False)
                 if info.get("_type") == "playlist" and info.get("entries"):
                     info = next(e for e in info["entries"] if e)
                 if info.get("is_live"):

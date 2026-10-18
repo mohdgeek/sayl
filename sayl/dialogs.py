@@ -44,9 +44,10 @@ def _title(text):
 
 
 class AddDialog(QDialog):
-    def __init__(self, config, parent=None, urls="", video=False):
+    def __init__(self, config, parent=None, urls="", video=False, preset=None):
         super().__init__(parent)
         self.config = config
+        self._want_h = int((preset or {}).get("height") or 0)
         self.setWindowTitle("إضافة تحميل")
         self.setMinimumWidth(560)
         self._probe = _Probe()
@@ -174,6 +175,11 @@ class AddDialog(QDialog):
         self._manual = video       # إن اختار المستخدم النوع بنفسه لا نغيّره تلقائيًا
         self._set_mode(video, manual=False)
         self._on_text()
+        if preset:
+            if preset.get("audio_only"):
+                self.audio.setChecked(True)
+            elif self._want_h:
+                self._select_height(self._want_h)
         if video and urls.strip():             # قادم من الإضافة: اعرض الجودات المتاحة فورًا
             from PySide6.QtCore import QTimer
             QTimer.singleShot(150, self._start_probe)
@@ -278,6 +284,20 @@ class AddDialog(QDialog):
             self.quality.addItem(f"{h}p", h)
         i = self.quality.findData(cur)
         self.quality.setCurrentIndex(max(0, i))
+        if self._want_h:
+            self._select_height(self._want_h)
+
+    def _select_height(self, want):
+        """يختار الجودة المطلوبة، وإن لم تتوفر فأقرب جودة أقل منها."""
+        best = None
+        for i in range(self.quality.count()):
+            h = self.quality.itemData(i) or 0
+            if h and h <= want and (best is None or h > (self.quality.itemData(best) or 0)):
+                best = i
+        if best is None and self.quality.findData(want) < 0:
+            self.quality.addItem(f"{want}p", want)
+            best = self.quality.count() - 1
+        self.quality.setCurrentIndex(best if best is not None else 0)
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "اختر مجلد الحفظ", self.folder.text())

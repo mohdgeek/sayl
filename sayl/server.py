@@ -162,7 +162,9 @@ def make_handler(manager, config, on_add=None, on_confirm=None):
                 if height is not None and not 100 <= height <= 4320:
                     raise ValueError("height")
                 if data.get("confirm") and on_confirm:       # يفتح البرنامج نافذة اختيار الجودة والمجلد
-                    on_confirm(url, hdrs, kind)
+                    h0 = data.get("height")
+                    on_confirm(url, hdrs, kind, {"height": int(h0) if h0 else None,
+                                                 "audio_only": bool(data.get("audio_only"))})
                     self._send(200, {"ok": True, "confirm": True})
                     return
                 try:
