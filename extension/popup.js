@@ -1,0 +1,69 @@
+const $ = (id) => document.getElementById(id);
+const say = (text, ok) => { const m = $("msg"); m.textContent = text; m.className = ok ? "ok" : "bad"; };
+
+async function send(url, kind, referrer) {
+  const res = await chrome.runtime.sendMessage({ type: "send", url, kind, referrer });
+  if (res && res.ok) say("تمت الإضافة إلى سيل", true);
+  else say((res && res.error) || "تعذّر الاتصال بالبرنامج", false);
+}
+
+function render(list, tabUrl) {
+  const ul = $("list");
+  ul.textContent = "";
+  $("count").textContent = list.length ? `${list.length} عنصر` : "";
+  $("empty").style.display = list.length ? "none" : "block";
+  for (const e of list.slice().reverse()) {
+    const li = document.createElement("li");
+    const type = document.createElement("span");
+    type.className = "type" + (e.kind === "manifest" ? " hls" : "");
+    type.textContent = e.type;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const u = document.createElement("div");
+    u.className = "u";
+    u.textContent = e.url;
+    u.title = e.url;
+    const s = document.createElement("div");
+    s.className = "s";
+    s.textContent = [SaylLib.hostOf(e.url), SaylLib.fmtSize(e.size)].filter(Boolean).join(" · ");
+    meta.append(u, s);
+    const b = document.createElement("button");
+    b.className = "btn small";
+    b.textContent = "تحميل";
+    b.addEventListener("click", () => send(e.url, e.kind === "manifest" ? "media" : "auto", tabUrl));
+    li.append(type, meta, b);
+    ul.append(li);
+  }
+}
+
+async function init() {
+  const s = await chrome.storage.local.get({ port: 6800, token: "", enabled: true });
+  $("enabled").checked = s.enabled;
+  $("enabled").addEventListener("change", (e) => chrome.storage.local.set({ enabled: e.target.checked }));
+  const opts = () => chrome.runtime.openOptionsPage();
+  $("gear").addEventListener("click", opts);
+  $("open-opts").addEventListener("click", opts);
+
+  if (!s.token) {
+    $("setup").style.display = "block";
+    $("app").style.display = "none";
+    $("st").textContent = "غير مفعّلة";
+    $("dot").className = "dot off";
+    return;
+  }
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const key = `m_${tab.id}`;
+  const store = await chrome.storage.session.get(key);
+  render(store[key] || [], tab.url);
+  chrome.storage.onChanged.addListener((ch, area) => {
+    if (area === "session" && ch[key]) render(ch[key].newValue || [], tab.url);
+  });
+  $("page").addEventListener("click", () => send(tab.url, "media", tab.url));
+
+  const res = await chrome.runtime.sendMessage({ type: "ping" });
+  const on = res && res.ok;
+  $("dot").className = "dot " + (on ? "on" : "off");
+  $("st").textContent = on ? "متصل" : "البرنامج غير شغّال";
+  if (on && res.media === false) say("ميزة الفيديو تحتاج yt-dlp في البرنامج", false);
+}
+init();

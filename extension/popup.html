@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>سيل</title>
+<link rel="stylesheet" href="ui.css">
+<style>
+  body { width: 380px; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; }
+  .logo svg { width: 18px; height: 18px; stroke: var(--on-accent); fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  h1 { margin: 0; font-size: 17px; font-weight: 800; flex: 1; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sub); }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--err); }
+  .gear { background: none; border: 0; color: var(--sub); padding: 4px 6px; border-radius: 8px; font-size: 16px; }
+  .gear:hover { background: var(--surface2); }
+  main { padding: 14px 16px 16px; }
+  .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .head b { font-size: 14px; }
+  ul { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; overflow-x: hidden; display: grid; gap: 7px; }
+  li { min-width: 0; display: flex; align-items: center; gap: 10px; background: var(--surface); border-radius: 12px; padding: 9px 10px 9px 12px; }
+  .type { flex: none; min-width: 46px; text-align: center; font-size: 11px; font-weight: 700; border-radius: 7px; padding: 3px 7px;
+          background: rgba(139,124,255,.16); color: #8B7CFF; }
+  .type.hls { background: rgba(255,176,32,.16); color: var(--accent); }
+  .meta { flex: 1; min-width: 0; direction: ltr; text-align: left; }
+  .meta .u { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .meta .s { color: var(--sub); font-size: 11px; }
+  .empty { background: var(--surface); border-radius: 12px; padding: 18px 14px; text-align: center; color: var(--sub); line-height: 1.7; }
+  .row2 { display: grid; gap: 8px; margin-top: 12px; }
+  .toggle { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
+  #msg { margin-top: 10px; min-height: 16px; font-size: 12px; }
+  .ok { color: var(--ok); } .bad { color: var(--err); }
+  #setup { display: none; text-align: center; padding: 8px 0 2px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><svg viewBox="0 0 24 24"><path d="M12 4.5v11M6.5 10.5 12 16l5.5-5.5M5 20h14"/></svg></div>
+  <h1>سيل</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="st">جارٍ الفحص…</span></div>
+  <button class="gear" id="gear" title="الإعدادات">⚙</button>
+</header>
+<main>
+  <div id="setup">
+    <div>الصق رمز الاتصال من إعدادات البرنامج كي تعمل الإضافة.</div>
+    <button class="btn" id="open-opts" style="margin-top:10px">فتح الإعدادات</button>
+  </div>
+  <div id="app">
+    <div class="head"><b>الوسائط المرصودة في الصفحة</b><span class="sub" id="count"></span></div>
+    <ul id="list"></ul>
+    <div class="empty" id="empty">لم يُرصد فيديو بعد.<br>شغّل الفيديو في الصفحة وسيظهر هنا.</div>
+    <div class="row2">
+      <button class="btn" id="page">تحميل فيديو هذه الصفحة</button>
+    </div>
+    <label class="toggle"><span>اعتراض تحميلات Chrome تلقائيًا</span><input type="checkbox" id="enabled"></label>
+    <div id="msg"></div>
+  </div>
+</main>
+<script src="lib.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
