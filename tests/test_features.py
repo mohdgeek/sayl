@@ -249,3 +249,43 @@ def test_extension_stats_and_browsers(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "BROWSERS", [("edge", "Microsoft Edge", "edge", ("msedge.exe",), "nope")])
     b = st.find_browsers()[0]
     assert b["exe"] == str(fake) and b["scheme"] == "edge"
+
+
+def test_native_host_protocol(tmp_path, monkeypatch):
+    import io, json as _j, struct
+    from sayl import host
+    cfg, mgr, _ = mk(tmp_path)
+    api = ApiServer(mgr, cfg)
+    api.start()
+    cfg["port"] = api.port
+    conf = {"port": api.port, "token": cfg["token"]}
+    try:
+        r = host.handle({"id": 7, "path": "/ping", "method": "GET", "ua": "Edg/130"}, conf, launch=False)
+        assert r["id"] == 7 and r["status"] == 200 and r["json"]["app"] == "Sayl"
+        r = host.handle({"id": 8, "path": "/add", "method": "POST", "body": {"url": "file:///x"}}, conf, launch=False)
+        assert r["status"] == 400
+        r = host.handle({"id": 9, "path": "/ping"}, {"port": api.port, "token": "bad"}, launch=False)
+        assert r["status"] == 401
+        assert host.handle({"id": 1, "path": "http://evil"}, conf)["error"] == "bad_request"
+        # بروتوكول الإطار: طول 4 بايت + JSON
+        msg = _j.dumps({"id": 3, "path": "/ping"}).encode()
+        out = io.BytesIO()
+        monkeypatch.setattr(host, "read_config", lambda path=None: conf)
+        host.main(io.BytesIO(struct.pack("<I", len(msg)) + msg), out)
+        data = out.getvalue()
+        assert _j.loads(data[4:4 + struct.unpack("<I", data[:4])[0]])["status"] == 200
+    finally:
+        api.stop()
+        mgr.shutdown()
+    # سيل مغلق ولا مسار لتشغيله: خطأ واضح
+    assert host.handle({"id": 5, "path": "/ping"}, {"port": 1, "token": "x"}, launch=True)["error"] == "app_not_running"
+
+
+def test_register_native_host(tmp_path):
+    import json as _j
+    from sayl import setup_tools as st
+    d = tmp_path / "nm"
+    written = st.register_native_host(extra_dirs=[str(d)], registry=False)
+    m = _j.load(open(d / "com.sayl.host.json"))
+    assert m["name"] == "com.sayl.host" and m["type"] == "stdio" and os.path.isfile(m["path"])
+    assert m["allowed_origins"] == [f"chrome-extension://{st.extension_id()}/"] and written

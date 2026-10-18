@@ -16,19 +16,17 @@
 <body>
   <h1>إعدادات سيل</h1>
   <div class="sub">اربط الإضافة بالبرنامج المثبّت على جهازك.</div>
-  <div class="steps">
-    <b>1.</b> شغّل برنامج سيل واضغط ⋮ ثم «ربط الإضافة».<br>
-    <b>2.</b> اضغط هنا الزر «ربط تلقائي» (خلال 5 دقائق).<br>
-    <b>3.</b> انتهى. لا حاجة لنسخ أي رمز.
-  </div>
+  <div class="steps" id="statusbox"><b>الحالة:</b> <span id="conn">جارٍ الفحص…</span><br>الربط تلقائي: ثبّت الإضافة وشغّل سيل فقط، لا رمز ولا منفذ.</div>
+  <details style="margin-top:14px"><summary style="cursor:pointer;color:#8D95AB">إعدادات متقدمة (اختيارية)</summary>
   <label class="field" for="token">رمز الإضافة</label>
   <input type="password" id="token" autocomplete="off" dir="ltr">
   <label class="field" for="port">المنفذ</label>
   <input type="number" id="port" value="6800" dir="ltr">
+    <button class="btn" id="pair" type="button" style="margin-top:10px">ربط احتياطي عبر HTTP</button>
+  </details>
   <label class="field" for="minSizeMB">تجاهل الملفات الأصغر من (ميغابايت)</label>
   <input type="number" id="minSizeMB" value="0" min="0" dir="ltr">
   <label class="check"><input type="checkbox" id="enabled"> اعتراض تحميلات Chrome تلقائيًا</label>
-  <button class="btn" id="pair">ربط تلقائي</button>
   <button class="btn" id="save">حفظ واختبار الاتصال</button>
   <div id="status"></div>
   <script src="options.js"></script>

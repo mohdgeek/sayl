@@ -575,7 +575,7 @@ class SettingsDialog(QDialog):
         lay.setSpacing(10)
         intro = QLabel("ثبّت إضافة سيل في أي متصفح مبني على Chromium. اضغط «تثبيت» بجانب المتصفح، "
                        "فنجهّز لك مجلد الإضافة ونفتح صفحة الإضافات فيه، ثم: فعّل «وضع المطوّر» ← "
-                       "«تحميل إضافة غير مُحزّمة» ← اختر المجلد. بعدها تُربط تلقائيًا خلال نصف دقيقة.")
+                       "«تحميل إضافة غير مُحزّمة» ← اختر المجلد. هذا كل شيء: لا رمز ولا منفذ، وتتصل الإضافة بسيل مباشرة.")
         intro.setWordWrap(True)
         intro.setObjectName("Sub")
         lay.addWidget(intro)
@@ -596,7 +596,7 @@ class SettingsDialog(QDialog):
         self.ext_msg.setObjectName("Sub")
         self.ext_state = QLabel("")
         self.ext_state.setWordWrap(True)
-        btn_pair = QPushButton("ربط الإضافة الآن")
+        btn_pair = QPushButton("إصلاح الاتصال")
         btn_pair.setObjectName("Primary")
         btn_pair.clicked.connect(self._pair_now)
         btn_folder = QPushButton("فتح مجلد الإضافة")
@@ -630,21 +630,27 @@ class SettingsDialog(QDialog):
             self.ext_state.setText(f"<b style='color:{theme.C['ok']}'>● الإضافة متصلة{who}</b>")
         elif bad and now - bad < 75:
             self.ext_state.setText(f"<b style='color:{theme.C['err']}'>● الإضافة تحاول الاتصال برمز خاطئ</b>"
-                                   " — اضغط «ربط الإضافة الآن» وانتظر نصف دقيقة.")
+                                   " — اضغط «إصلاح الاتصال».")
         else:
-            self.ext_state.setText("<b>● لم تتصل أي إضافة بعد</b> — ثبّتها من الأعلى ثم اضغط «ربط الإضافة الآن».")
+            self.ext_state.setText("<b>● لم تتصل أي إضافة بعد</b> — ثبّتها من الأعلى، وإن لم تتصل اضغط «إصلاح الاتصال».")
 
     def _pair_now(self):
         from .server import open_pairing
         open_pairing(300)
-        self.ext_msg.setText("فُتحت نافذة الربط لمدة 5 دقائق. الإضافة ستربط نفسها تلقائيًا خلال 30 ثانية، "
-                             "أو افتح نافذتها المنبثقة في المتصفح لتسريع ذلك.")
+        try:
+            setup_tools.register_native_host(self.config)      # يعيد تسجيل الجسر عند المتصفحات
+        except Exception as e:  # noqa: BLE001
+            self.ext_msg.setText(f"تعذّر تسجيل الجسر: {e}")
+            return
+        self.ext_msg.setText("أعدت تسجيل الاتصال عند المتصفحات. أعد تشغيل المتصفح مرة واحدة ثم افتح نافذة الإضافة. "
+                             "ستظهر حالة «متصلة» هنا خلال ثوانٍ.")
 
     def _install_in(self, browser):
         from .server import open_pairing
         try:
             path = setup_tools.export_extension(self.config)
             open_pairing(600)
+            setup_tools.register_native_host(self.config)
             setup_tools.open_extensions_page(browser)
         except Exception as e:  # noqa: BLE001
             self.ext_msg.setText(f"تعذّر التثبيت: {e}")
@@ -959,6 +965,7 @@ class WelcomeDialog(QDialog):
         from PySide6.QtGui import QDesktopServices
         try:
             path = setup_tools.export_extension(self.config)
+            setup_tools.register_native_host(self.config)
         except Exception as e:  # noqa: BLE001
             self.msg.setText(f"تعذّر تجهيز الإضافة: {e}")
             return

@@ -44,10 +44,11 @@ async function init() {
   $("gear").addEventListener("click", opts);
   $("open-opts").addEventListener("click", opts);
 
-  if (!s.token) {
+  const first = await chrome.runtime.sendMessage({ type: "ping" }).catch(() => null);
+  if (!s.token && !(first && first.ok)) {
     $("setup").style.display = "block";
     $("app").style.display = "none";
-    $("st").textContent = "غير مفعّلة";
+    $("st").textContent = "غير متصلة";
     $("dot").className = "dot off";
     return;
   }
@@ -60,7 +61,7 @@ async function init() {
   });
   $("page").addEventListener("click", () => send(tab.url, "media", tab.url));
 
-  const res = await chrome.runtime.sendMessage({ type: "ping" });
+  const res = first;
   const on = res && res.ok;
   $("dot").className = "dot " + (on ? "on" : "off");
   $("st").textContent = on ? "متصل" : "البرنامج غير شغّال";

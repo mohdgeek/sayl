@@ -18,7 +18,7 @@ MAX_BODY = 64 * 1024
 
 
 _PAIR = {"until": 0.0}
-STATS = {"seen": 0.0, "browser": "", "bad": 0.0}   # آخر اتصال ناجح من الإضافة، ومحاولة برمز خاطئ
+STATS = {"seen": 0.0, "browser": "", "bad": 0.0, "via": ""}   # آخر اتصال ناجح من الإضافة، ومحاولة برمز خاطئ
 
 
 def _browser_of(ua):
@@ -62,15 +62,18 @@ def make_handler(manager, config, on_add=None):
             if origin and not origin.startswith("chrome-extension://"):
                 self._send(403, {"ok": False, "error": "origin"})
                 return False
+            native = self.headers.get("X-Sayl-Via") == "native"
             tok = self.headers.get("X-Sayl-Token", "")
             if not hmac.compare_digest(tok.encode(), config["token"].encode()):
-                if origin:
+                if origin or native:
                     STATS["bad"] = time.time()
                 self._send(401, {"ok": False, "error": "token"})
                 return False
-            if origin:
+            if origin or native:
                 STATS["seen"] = time.time()
-                STATS["browser"] = _browser_of(self.headers.get("User-Agent", ""))
+                ua = self.headers.get("X-Sayl-UA") if native else self.headers.get("User-Agent", "")
+                STATS["browser"] = _browser_of(ua or "")
+                STATS["via"] = "native" if native else "http"
             return True
 
         def do_OPTIONS(self):

@@ -126,3 +126,87 @@ def open_extensions_page(browser):
     if not browser.get("exe"):
         raise FileNotFoundError(browser["name"])
     subprocess.Popen([browser["exe"], f"{browser['scheme']}://extensions"])
+
+
+# ------------------------------------------------------------ Native Messaging (بلا رمز ولا منفذ)
+HOST_NAME = "com.sayl.host"
+
+
+def extension_id():
+    """معرّف الإضافة الثابت: يُشتق من المفتاح العام المكتوب في manifest.json (كما يفعل Chrome)."""
+    import base64
+    import hashlib
+    with open(os.path.join(resource_path("extension"), "manifest.json"), "r", encoding="utf-8") as f:
+        key = json.load(f)["key"]
+    digest = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(c, 16)) for c in digest)
+
+
+def host_command():
+    """مسار ملف تنفيذي يشغّل الجسر: SaylHost.exe في النسخة المُغلَّفة، أو سكربت صغير أثناء التطوير."""
+    if getattr(sys, "frozen", False):
+        src = resource_path(os.path.join("host", "SaylHost.exe"))
+        dst = os.path.join(APP_DIR, "SaylHost.exe")
+        if os.path.isfile(src):
+            os.makedirs(APP_DIR, exist_ok=True)
+            if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
+                shutil.copyfile(src, dst)
+        return dst
+    run_host = resource_path("run_host.py")
+    os.makedirs(APP_DIR, exist_ok=True)
+    if sys.platform.startswith("win"):
+        path = os.path.join(APP_DIR, "sayl-host.bat")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f'@echo off\r\n"{sys.executable}" "{run_host}"\r\n')
+    else:
+        path = os.path.join(APP_DIR, "sayl-host.sh")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f'#!/bin/sh\nexec "{sys.executable}" "{run_host}"\n')
+        os.chmod(path, 0o755)
+    return path
+
+
+def _nm_dirs_posix():
+    home = os.path.expanduser("~")
+    cands = [".config/google-chrome", ".config/chromium", ".config/microsoft-edge",
+             ".config/BraveSoftware/Brave-Browser", ".config/vivaldi", ".config/opera"]
+    return [os.path.join(home, c, "NativeMessagingHosts") for c in cands
+            if os.path.isdir(os.path.join(home, c))]
+
+
+_WIN_NM_KEYS = (r"Software\Google\Chrome\NativeMessagingHosts",
+                r"Software\Microsoft\Edge\NativeMessagingHosts",
+                r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts")
+
+
+def register_native_host(config=None, extra_dirs=None, registry=True):
+    """يسجّل الجسر عند المتصفحات ليتصل بالإضافة تلقائيًا. آمن للاستدعاء عند كل تشغيل."""
+    os.makedirs(APP_DIR, exist_ok=True)
+    manifest = {
+        "name": HOST_NAME,
+        "description": "Sayl download manager bridge",
+        "path": host_command(),
+        "type": "stdio",
+        "allowed_origins": [f"chrome-extension://{extension_id()}/"],
+    }
+    main_path = os.path.join(APP_DIR, f"{HOST_NAME}.json")
+    with open(main_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    written = [main_path]
+    if sys.platform.startswith("win"):
+        if registry:
+            import winreg
+            for base in _WIN_NM_KEYS:
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + "\\" + HOST_NAME) as k:
+                    winreg.SetValueEx(k, "", 0, winreg.REG_SZ, main_path)
+                written.append("HKCU\\" + base)
+    else:
+        for d in (extra_dirs or []) + (_nm_dirs_posix() if registry else []):
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, f"{HOST_NAME}.json")
+            shutil.copyfile(main_path, p)
+            written.append(p)
+    if config is not None and getattr(sys, "frozen", False):
+        config["app_exe"] = sys.executable
+        config.save()
+    return written

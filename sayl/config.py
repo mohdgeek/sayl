@@ -46,7 +46,8 @@ DEFAULTS = {
     "after_all": "none",
     "update_repo": "mohdgeek/sayl",
     "auto_update_check": True,
-    "welcomed": False,       # none | quit | shutdown
+    "welcomed": False,
+    "app_exe": "",              # مسار البرنامج المُغلَّف، ليشغّله الجسر إن كان مغلقًا       # none | quit | shutdown
 }
 
 

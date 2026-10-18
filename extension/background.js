@@ -29,11 +29,64 @@ async function pairFromApp(port) {
   } catch (e) { return false; }
 }
 
+// ---- النقل الأساسي: Native Messaging (بلا رمز ولا منفذ). الاحتياطي: HTTP محلي بالرمز.
+const HOST = "com.sayl.host";
+let nport = null;
+let nSeq = 0;
+let nBadUntil = 0;
+const nPending = new Map();
+
+function nativeConnect() {
+  if (nport) return nport;
+  nport = chrome.runtime.connectNative(HOST);
+  nport.onMessage.addListener((m) => {
+    const p = nPending.get(m.id);
+    if (p) { nPending.delete(m.id); p.resolve(m); }
+  });
+  nport.onDisconnect.addListener(() => {
+    const err = chrome.runtime.lastError?.message || "disconnected";
+    nport = null;
+    for (const p of nPending.values()) p.reject(new Error(err));
+    nPending.clear();
+  });
+  return nport;
+}
+
+function nativeCall(path, options) {
+  if (Date.now() < nBadUntil) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const id = ++nSeq;
+    const timer = setTimeout(() => { nPending.delete(id); reject(new Error("timeout")); }, 45000);
+    nPending.set(id, {
+      resolve: (m) => { clearTimeout(timer); resolve(m); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+    try {
+      nativeConnect().postMessage({
+        id, path, method: options.method || "GET",
+        body: options.body ? JSON.parse(options.body) : null, ua: navigator.userAgent,
+      });
+    } catch (e) { nPending.delete(id); clearTimeout(timer); reject(e); }
+  }).catch((e) => {
+    nBadUntil = Date.now() + 60000;     // الجسر غير مسجّل أو معطّل: نستخدم HTTP دقيقة كاملة
+    return null;
+  });
+}
+
 async function api(path, options = {}, retried = false) {
+  const m = await nativeCall(path, options);
+  if (m) {
+    if (m.error === "app_not_running") throw new Error("برنامج سيل غير شغّال");
+    if (m.error) throw new Error(m.error);
+    if (m.status >= 400) throw new Error(`خطأ ${m.status}`);
+    return m.json;
+  }
   const { port, token } = await getSettings();
+  if (!token && !(await pairFromApp(port))) throw new Error("الإضافة غير مرتبطة بسيل");
+  const t = (await getSettings()).token;
   const res = await fetch(`http://127.0.0.1:${port}${path}`, {
     ...options,
-    headers: { "Content-Type": "application/json", "X-Sayl-Token": token, ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", "X-Sayl-Token": t, ...(options.headers || {}) },
   });
   if (res.status === 401 && !retried && (await pairFromApp(port))) return api(path, options, true);
   if (!res.ok) throw new Error(res.status === 401 ? "الرمز غير صحيح" : `خطأ ${res.status}`);

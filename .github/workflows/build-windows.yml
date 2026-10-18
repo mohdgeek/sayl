@@ -30,7 +30,11 @@ jobs:
       - if: steps.v.outputs.exists == 'false'
         run: pip install -r requirements.txt pyinstaller
       - if: steps.v.outputs.exists == 'false'
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name Sayl --icon assets/icon.ico --add-data "extension;extension" --collect-all yt_dlp run_sayl.py
+        name: Build native host (console, tiny)
+        run: pyinstaller --noconfirm --clean --onefile --console --name SaylHost run_host.py
+      - if: steps.v.outputs.exists == 'false'
+        name: Build app
+        run: pyinstaller --noconfirm --onefile --windowed --name Sayl --icon assets/icon.ico --add-data "extension;extension" --add-data "dist/SaylHost.exe;host" --collect-all yt_dlp run_sayl.py
       - if: steps.v.outputs.exists == 'false'
         name: Publish release
         uses: softprops/action-gh-release@v2

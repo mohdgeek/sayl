@@ -221,7 +221,6 @@ class MainWindow(QMainWindow):
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
         mm.addSeparator()
         mm.addAction("تثبيت إضافة Chrome…", self.show_welcome)
-        mm.addAction("ربط الإضافة (5 دقائق)", self.pair_extension)
         mm.addSeparator()
         after = mm.addMenu("بعد انتهاء الطابور")
         self._after_acts = {}
@@ -700,6 +699,10 @@ def main():
         QMessageBox.information(None, "سيل", "سيل يعمل بالفعل. ابحث عن أيقونته بجانب الساعة.")
         return
     app.setStyleSheet(theme.apply_config(config))
+    try:
+        setup_tools.register_native_host(config)      # يجعل الإضافة تعمل بلا رمز ولا منفذ
+    except Exception:  # noqa: BLE001
+        pass
     manager = DownloadManager(config)
     bridge = Bridge()
     win = MainWindow(manager, config, bridge)

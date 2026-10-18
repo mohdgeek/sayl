@@ -8,8 +8,10 @@ call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install -r requirements.txt pyinstaller || goto :err
 
-pyinstaller --noconfirm --clean --onefile --windowed --name Sayl ^
-  --icon assets\icon.ico --add-data "extension;extension" --collect-all yt_dlp run_sayl.py || goto :err
+pyinstaller --noconfirm --clean --onefile --console --name SaylHost run_host.py || goto :err
+pyinstaller --noconfirm --onefile --windowed --name Sayl ^
+  --icon assets\icon.ico --add-data "extension;extension" --add-data "dist\SaylHost.exe;host" ^
+  --collect-all yt_dlp run_sayl.py || goto :err
 
 echo.
 echo Done: dist\Sayl.exe
