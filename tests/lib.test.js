@@ -16,4 +16,9 @@ assert.strictEqual(L.pickBest([{kind:'file',size:5},{kind:'manifest',url:'m'},{k
 assert.strictEqual(L.pickBest([{kind:'file',size:5,url:'a'},{kind:'file',size:9,url:'b'}]).url, 'b');
 assert.strictEqual(L.dedupeKey('https://a.com/p.m3u8?token=1','manifest'), 'https://a.com/p.m3u8');
 assert.strictEqual(L.fmtSize(1536), '1.5 KB');
+assert.strictEqual(L.pageVideo('https://www.youtube.com/watch?v=QqumyKqzl4s'), 'YouTube');
+assert.strictEqual(L.pageVideo('https://youtu.be/abc'), 'YouTube');
+assert.strictEqual(L.pageVideo('https://www.youtube.com/'), null);
+assert.strictEqual(L.pageVideo('https://vimeo.com/12345'), 'Vimeo');
+assert.strictEqual(L.pageVideo('https://example.com/watch?v=1'), null);
 console.log('lib tests passed');

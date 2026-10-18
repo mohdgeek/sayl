@@ -8,11 +8,13 @@ async function send(url, kind, referrer) {
 }
 
 function render(list, tabUrl) {
+  const site = SaylLib.pageVideo(tabUrl);
+  if (site) list = [{ url: tabUrl, kind: "page", type: site, size: null }, ...list];
   const ul = $("list");
   ul.textContent = "";
   $("count").textContent = list.length ? `${list.length} عنصر` : "";
   $("empty").style.display = list.length ? "none" : "block";
-  for (const e of list.slice().reverse()) {
+  for (const e of (site ? [list[0], ...list.slice(1).reverse()] : list.slice().reverse())) {
     const li = document.createElement("li");
     const type = document.createElement("span");
     type.className = "type" + (e.kind === "manifest" ? " hls" : "");
@@ -25,12 +27,13 @@ function render(list, tabUrl) {
     u.title = e.url;
     const s = document.createElement("div");
     s.className = "s";
-    s.textContent = [SaylLib.hostOf(e.url), SaylLib.fmtSize(e.size)].filter(Boolean).join(" · ");
+    s.textContent = e.kind === "page" ? "فيديو هذه الصفحة · يُستخرج تلقائيًا"
+      : [SaylLib.hostOf(e.url), SaylLib.fmtSize(e.size)].filter(Boolean).join(" · ");
     meta.append(u, s);
     const b = document.createElement("button");
     b.className = "btn small";
     b.textContent = "تحميل";
-    b.addEventListener("click", () => send(e.url, e.kind === "manifest" ? "media" : "auto", tabUrl));
+    b.addEventListener("click", () => send(e.url, e.kind === "manifest" || e.kind === "page" ? "media" : "auto", tabUrl));
     li.append(type, meta, b);
     ul.append(li);
   }

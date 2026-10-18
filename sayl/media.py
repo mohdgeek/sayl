@@ -29,6 +29,34 @@ MEDIA_HOSTS = (
 MANIFEST_EXT = (".m3u8", ".mpd")
 
 
+def clean_headers(url, headers):
+    """مواقع مثل يوتيوب يتعامل معها yt-dlp بنفسه؛ تمرير Cookie/User-Agent المتصفح إليها يُفسد طلباته
+    (يظهر الخطأ «The page needs to be reloaded»). نُبقي Referer فقط."""
+    h = dict(headers or {})
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if any(host == s or host.endswith("." + s) for s in MEDIA_HOSTS):
+        h = {k: v for k, v in h.items() if k.lower() == "referer"}
+    return h
+
+
+def js_runtime_opts():
+    """يوتيوب يحتاج بيئة JavaScript لفك التوقيع (deno/node...). نستعمل الموجود أو ما نزّله البرنامج."""
+    opts = {"remote_components": ["ejs:github"]}
+    local = os.path.join(os.path.expanduser("~"), ".sayl", "bin", "deno.exe" if os.name == "nt" else "deno")
+    if os.path.isfile(local):
+        opts["js_runtimes"] = {"deno": {"path": local}}
+    else:
+        found = {n: {"path": shutil.which(n)} for n in ("deno", "node", "bun") if shutil.which(n)}
+        if found:
+            opts["js_runtimes"] = found
+    return opts
+
+
+_RETRY_ERR = ("reloaded", "sign in", "not available", "403", "player response", "po token",
+              "challenge", "n function", "signature", "unable to extract")
+_CLIENTS = (None, ["android_vr"], ["tv"], ["mweb"])
+
+
 def available():
     return yt_dlp is not None
 
@@ -100,7 +128,8 @@ def probe(url, headers=None, max_entries=300):
     pl = looks_like_playlist(url)
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": not pl,
             "extract_flat": "in_playlist", "socket_timeout": 15, "logger": log,
-            "http_headers": dict(headers or {})}
+            "http_headers": clean_headers(url, headers)}
+    opts.update(js_runtime_opts())
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -148,7 +177,7 @@ class MediaDownload:
                  subfolder=False):
         self.id = id or uuid.uuid4().hex[:10]
         self.url = url
-        self.headers = dict(headers or {})
+        self.headers = clean_headers(url, headers)
         self.dest_dir = dest_dir
         self.height = height
         self.audio_only = bool(audio_only)
@@ -304,8 +333,42 @@ class MediaDownload:
             self.error, self.state = "حزمة yt-dlp غير مثبّتة", ERROR
             return
         log = _Log()
-        opts = self._build_opts(log)
         try:
+            self._attempt_all(log)
+        except DownloadCancelled:
+            return
+        except Exception as e:  # noqa: BLE001
+            if self._stop.is_set():
+                return
+            self.error = log.last_error or str(e)[:300]
+            self.state = ERROR
+        finally:
+            self.speed = 0.0
+
+    def _attempt_all(self, log):
+        yt = "youtu" in self.url
+        last = None
+        for clients in (_CLIENTS if yt else (None,)):
+            opts = self._build_opts(log)
+            opts.update(js_runtime_opts())
+            if clients:
+                opts["extractor_args"] = {"youtube": {"player_client": clients}}
+            try:
+                return self._attempt(opts)
+            except DownloadCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                last = e
+                text = (log.last_error or str(e)).lower()
+                if self._stop.is_set() or not any(t in text for t in _RETRY_ERR):
+                    break
+                log.last_error = ""
+        ver = getattr(yt_dlp.version, "__version__", "?")
+        msg = (log.last_error or str(last))[:260]
+        raise RuntimeError(f"{msg} (yt-dlp {ver})")
+
+    def _attempt(self, opts):
+        if True:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(self.url, download=False)
                 if info.get("_type") == "playlist" and info.get("entries"):
@@ -324,21 +387,12 @@ class MediaDownload:
             rd = (result or {}).get("requested_downloads") or []
             path = rd[0].get("filepath") if rd else None
             if self._stop.is_set():
-                return
+                raise DownloadCancelled()
             if path and os.path.exists(path):
                 self.filename = os.path.basename(path)
                 self.final_dir = os.path.dirname(path)
                 self.size = os.path.getsize(path)
             self.state = COMPLETED
-        except DownloadCancelled:
-            return
-        except Exception as e:  # noqa: BLE001
-            if self._stop.is_set():
-                return
-            self.error = log.last_error or str(e)[:300]
-            self.state = ERROR
-        finally:
-            self.speed = 0.0
 
 
 def _glob_partials(folder, prefix, suffix):

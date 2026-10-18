@@ -73,6 +73,27 @@ const SaylLib = (() => {
     return entries.slice().sort((a, b) => (b.size || 0) - (a.size || 0))[0];
   }
 
-  return { classify, dedupeKey, fmtSize, pickBest, hostOf };
+  // صفحة فيديو لموقع يدعمه البرنامج (يوتيوب وغيره): الفيديو هناك blob فلا يُرصد رابطه، فنعرض رابط الصفحة نفسه.
+  function pageVideo(url) {
+    let u;
+    try { u = new URL(url); } catch (e) { return null; }
+    if (!/^https?:$/.test(u.protocol)) return null;
+    const h = u.hostname.toLowerCase().replace(/^(www|m|music)\./, "");
+    const p = u.pathname;
+    if (h === "youtube.com") {
+      if (p === "/watch" && u.searchParams.get("v")) return "YouTube";
+      if (/^\/(shorts|live|embed)\/[\w-]+/.test(p)) return "YouTube";
+      return null;
+    }
+    if (h === "youtu.be") return p.length > 1 ? "YouTube" : null;
+    const sites = { "vimeo.com": /^\/\d+/, "dailymotion.com": /^\/video\//, "twitch.tv": /^\/(videos\/\d+|[\w-]+\/clip\/)/,
+      "tiktok.com": /\/video\//, "facebook.com": /\/(videos|watch|reel)/, "fb.watch": /./,
+      "instagram.com": /^\/(p|reel|tv)\//, "x.com": /\/status\//, "twitter.com": /\/status\//,
+      "reddit.com": /\/comments\//, "streamable.com": /^\/\w+/, "bilibili.com": /^\/video\//, "soundcloud.com": /^\/[^/]+\/[^/]+/ };
+    const re = sites[h];
+    return re && re.test(p) ? h.split(".")[0].replace(/^./, (c) => c.toUpperCase()) : null;
+  }
+
+  return { classify, dedupeKey, fmtSize, pickBest, hostOf, pageVideo };
 })();
 if (typeof module !== "undefined") module.exports = SaylLib;

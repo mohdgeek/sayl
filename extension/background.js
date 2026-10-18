@@ -139,7 +139,14 @@ chrome.webRequest.onHeadersReceived.addListener((d) => {
   addDetected(d.tabId, { url: d.url, kind: info.kind, type: info.type, size: info.size, ts: Date.now() });
 }, { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "other"] }, ["responseHeaders"]);
 
-chrome.tabs.onUpdated.addListener((tabId, change) => {
+function markPage(tabId, url) {
+  if (!SaylLib.pageVideo(url)) return;
+  chrome.action.setBadgeBackgroundColor({ tabId, color: "#FFB020" }).catch(() => {});
+  chrome.action.setBadgeText({ tabId, text: "▶" }).catch(() => {});
+}
+
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.url || change.status === "complete") markPage(tabId, change.url || tab.url);
   if (change.status === "loading" && change.url) {       // تنقّل جديد: نصفّر القائمة
     chrome.storage.session.remove(key(tabId));
     chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
@@ -196,6 +203,9 @@ async function grab(msg, sender) {
   const tab = sender.tab;
   let url = msg.src && /^https?:/i.test(msg.src) ? msg.src : null;
   let kind = "auto";
+  if (tab && SaylLib.pageVideo(tab.url) && (!url || /^blob:/i.test(msg.src || ""))) {
+    url = tab.url; kind = "media";                        // يوتيوب وأمثاله: البرنامج يستخرج الفيديو من الصفحة
+  }
   if (!url && tab) {                                      // فيديو blob: نبحث عن الأفضل المرصود
     const store = await chrome.storage.session.get(key(tab.id));
     const best = SaylLib.pickBest(store[key(tab.id)]);

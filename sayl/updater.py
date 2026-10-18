@@ -97,6 +97,10 @@ def auto_update_bg(config):
 
     def work():
         try:
+            ensure_js_runtime()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             if time.time() - config.data.get("ytdlp_checked", 0) < 86400:
                 return
             config.data["ytdlp_checked"] = time.time()
@@ -106,3 +110,27 @@ def auto_update_bg(config):
         except Exception:  # noqa: BLE001
             pass
     threading.Thread(target=work, daemon=True).start()
+
+
+def ensure_js_runtime():
+    """يوتيوب يحتاج JavaScript لفك التوقيع. إن لم يوجد deno/node نُنزّل deno الصغير مرة واحدة (ويندوز)."""
+    import shutil
+    import zipfile
+    if os.name != "nt":
+        return
+    d = os.path.join(APP_DIR, "bin")
+    exe = os.path.join(d, "deno.exe")
+    if os.path.isfile(exe) or any(shutil.which(n) for n in ("deno", "node", "bun")):
+        return
+    try:
+        os.makedirs(d, exist_ok=True)
+        url = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+        zp = os.path.join(d, "deno.zip.part")
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Sayl"}), timeout=60) as r, \
+                open(zp, "wb") as out:
+            shutil.copyfileobj(r, out)
+        with zipfile.ZipFile(zp) as z:
+            z.extract("deno.exe", d)
+        os.remove(zp)
+    except Exception:  # noqa: BLE001
+        pass

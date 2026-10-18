@@ -366,3 +366,10 @@ def test_host_does_not_relaunch_on_ping(monkeypatch):
     assert calls == []                      # فحص دوري: لا إعادة تشغيل
     assert host.handle({"id": 2, "path": "/add", "method": "POST", "body": {}}, cfg)["error"] == "app_not_running"
     assert calls == [1]                     # تحميل فعلي: يحاول تشغيل سيل
+
+
+def test_clean_headers_for_youtube():
+    from sayl import media
+    h = {"Cookie": "a=b", "User-Agent": "x", "Referer": "https://www.youtube.com/"}
+    assert media.clean_headers("https://www.youtube.com/watch?v=1", h) == {"Referer": "https://www.youtube.com/"}
+    assert media.clean_headers("https://cdn.example.com/a.m3u8", h) == h
