@@ -9,6 +9,7 @@ import time
 import urllib.parse
 import uuid
 
+from . import updater  # noqa: F401  (يفعّل نسخة yt-dlp المحدَّثة قبل استيراده)
 from .categories import LABELS
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, RateLimiter, sanitize_filename)

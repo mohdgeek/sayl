@@ -720,6 +720,8 @@ def main():
         if not config["welcomed"]:
             QTimer.singleShot(400, win.show_welcome)
     win.check_updates_bg()
+    from . import updater
+    updater.auto_update_bg(config)
     code = app.exec()
     lock.unlock()
     sys.exit(code)
