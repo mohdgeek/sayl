@@ -18,7 +18,7 @@ from .dialogs import AddDialog, SettingsDialog, WelcomeDialog
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
 from .media import is_media_url
-from .server import ApiServer, open_pairing
+from .server import ApiServer, open_pairing, start_server
 from .widgets import (CAT_ICON, DownloadRow, ElidedLabel, FileTile, IconButton, NavButton,
                       SpeedGraph, fmt_size)
 
@@ -708,11 +708,13 @@ def main():
     win = MainWindow(manager, config, bridge)
     bridge.added.connect(win.on_remote_add)
     try:
-        server = ApiServer(manager, config, on_add=lambda d: bridge.added.emit(d.id))
-        server.start()
+        server, moved = start_server(manager, config, on_add=lambda d: bridge.added.emit(d.id))
+        if moved:
+            manager.events.append(f"المنفذ {server.wanted_port} مشغول بنسخة أخرى من سيل أو برنامج آخر، "
+                                  f"فاستخدمنا {server.port}. أغلق النسخ القديمة من مدير المهام.")
     except OSError as e:
-        QMessageBox.warning(win, "سيل", f"تعذّر فتح المنفذ {config['port']}: {e}\n"
-                            "لن تعمل إضافة المتصفح حتى تغيّر المنفذ.")
+        QMessageBox.warning(win, "سيل", f"تعذّر تشغيل الخادم المحلي: {e}\n"
+                            "لن تعمل إضافة المتصفح.")
     if "--minimized" not in sys.argv:
         win.show()
         if not config["welcomed"]:

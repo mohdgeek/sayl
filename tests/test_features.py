@@ -331,3 +331,27 @@ def test_token_selfheal_from_disk(tmp_path):
     finally:
         api.stop()
         mgr.shutdown()
+
+
+def test_port_fallback_when_busy(tmp_path):
+    import socket
+    from sayl.server import start_server
+    cfg, mgr, _ = mk(tmp_path)
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    busy = blocker.getsockname()[1]
+    cfg["port"] = busy
+    srv, moved = start_server(mgr, cfg)
+    try:
+        assert moved and srv.port != busy and cfg["port"] == srv.port
+        r = requests.get(f"http://127.0.0.1:{srv.port}/ping", headers={"X-Sayl-Token": cfg["token"]})
+        assert r.status_code == 200
+    finally:
+        srv.stop()
+        blocker.close()
+        mgr.shutdown()
+    cfg["port"] = 0
+    srv2, moved2 = start_server(mgr, cfg)
+    assert not moved2
+    srv2.stop()

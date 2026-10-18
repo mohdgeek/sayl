@@ -6,6 +6,7 @@
 from .manager import DuplicateError
 import hmac
 import json
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -159,10 +160,42 @@ def make_handler(manager, config, on_add=None):
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    # على ويندوز يسمح SO_REUSEADDR لعمليتين بربط المنفذ نفسه، فتبقى النسخة القديمة هي التي تردّ
+    # (وهذا ما سبّب خطأ الرمز). نمنع ذلك ليفشل الربط الثاني فنختار منفذًا آخر.
+    allow_reuse_address = False
+    daemon_threads = True
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def start_server(manager, config, on_add=None):
+    """يشغّل الخادم على المنفذ المضبوط، وإن كان مشغولًا يختار منفذًا حرًّا ويحفظه في الإعدادات.
+
+    يعيد (الخادم، هل تغيّر المنفذ؟). الجسر يقرأ المنفذ من ملف الإعدادات فيتبع التغيير تلقائيًا.
+    """
+    wanted = int(config["port"])
+    try:
+        srv = ApiServer(manager, config, on_add)
+        fell_back = False
+    except OSError:
+        config["port"] = 0
+        srv = ApiServer(manager, config, on_add)
+        config["port"] = srv.port
+        config.save()
+        fell_back = True
+    srv.start()
+    srv.wanted_port = wanted
+    return srv, fell_back
+
+
 class ApiServer:
     def __init__(self, manager, config, on_add=None):
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", int(config["port"])),
-                                         make_handler(manager, config, on_add))
+        self.httpd = _Server(("127.0.0.1", int(config["port"])),
+                             make_handler(manager, config, on_add))
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     @property

@@ -291,6 +291,9 @@ def self_test_host(timeout=20):
     if r.get("status") == 200:
         return True, "الجسر يعمل ويتصل بسيل"
     j = r.get("json") or {}
+    if r.get("status") == 401 and not (r.get("json") or {}).get("server_fp"):
+        return False, ("المنفذ يردّ عليه برنامج قديم أو غريب (ليس هذه النسخة من سيل). "
+                       "أنهِ كل عمليات Sayl.exe من مدير المهام ثم شغّل سيل من جديد.")
     if r.get("status") == 401:
         return False, (f"الرمز لا يطابق. بصمة الجسر: {j.get('host_fp')} | بصمة البرنامج: {j.get('server_fp')} | "
                        f"ملف الجسر: {j.get('host_cfg')} (موجود: {j.get('host_cfg_exists')}) | "
