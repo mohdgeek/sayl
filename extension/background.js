@@ -110,9 +110,15 @@ async function buildHeaders(url, referrer) {
 }
 
 // kind: "auto" | "http" | "media"
-async function sendToSayl(url, { referrer = "", kind = "auto", filename = null } = {}) {
+async function sendToSayl(url, { referrer = "", kind = "auto", filename = null, height = null,
+                                 audio_only = false, confirm = null } = {}) {
   const headers = await buildHeaders(url, referrer);
-  const r = await api("/add", { method: "POST", body: JSON.stringify({ url, headers, filename, kind }) });
+  if (confirm === null) {                       // الفيديو: يعرض البرنامج نافذة الجودة والمجلد أولًا
+    const s = await chrome.storage.local.get({ confirmVideo: true });
+    confirm = kind === "media" && s.confirmVideo !== false;
+  }
+  const r = await api("/add", { method: "POST",
+    body: JSON.stringify({ url, headers, filename, kind, height, audio_only, confirm }) });
   if (r && r.duplicate) notify("هذا الرابط موجود سابقًا في سيل");
   return r;
 }
@@ -224,7 +230,13 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   (async () => {
     try {
       if (msg.type === "send") {
-        await sendToSayl(msg.url, { referrer: msg.referrer || "", kind: msg.kind || "auto" });
+        await sendToSayl(msg.url, { referrer: msg.referrer || "", kind: msg.kind || "auto",
+          height: msg.height || null, audio_only: !!msg.audio_only,
+          confirm: msg.confirm === undefined ? null : msg.confirm });
+      } else if (msg.type === "formats") {
+        const r = await api("/probe", { method: "POST", body: JSON.stringify({ url: msg.url }) });
+        respond(r && r.ok ? { ok: true, ...r } : { ok: false, error: (r && r.error) || "تعذّر فحص الفيديو" });
+        return;
       } else if (msg.type === "grab") {
         await grab(msg, sender);
       } else if (msg.type === "ping") {

@@ -31,6 +31,7 @@ TITLES.update({k: l for k, _, l in CAT_NAV})
 class Bridge(QObject):
     added = Signal(str)          # من خيط الخادم إلى خيط الواجهة
     hashed = Signal(str, str)    # (اسم الملف، SHA-256)
+    confirm = Signal(str, object, str)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
 
 
 def looks_downloadable(text):
@@ -556,7 +557,12 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is not box.button(QMessageBox.Cancel):
                 power.shutdown(0)
 
-    def open_add(self, urls="", video=False):
+    def open_confirm(self, url, headers, kind):
+        """طلب من الإضافة: أظهر النافذة لاختيار الجودة والمجلد قبل التحميل."""
+        self.show_normal()
+        self.open_add(urls=url, video=(kind == "media"), headers=headers)
+
+    def open_add(self, urls="", video=False, headers=None):
         dlg = AddDialog(self.config, self, urls=urls, video=video)
         if dlg.exec():
             v = dlg.values()
@@ -567,7 +573,8 @@ class MainWindow(QMainWindow):
                 try:
                     d = self._add(u, quiet=many, dest_dir=v["folder"] or None, kind=v["kind"],
                                   height=v["height"], audio_only=v["audio_only"],
-                                  force=not v["later"], subs=v["subs"] or None)
+                                  force=not v["later"], subs=v["subs"] or None,
+                                  headers=headers or None)
                     skipped += d is None
                 except ValueError as e:
                     errors.append(f"{u[:70]}\n{e}")
@@ -711,8 +718,10 @@ def main():
     bridge = Bridge()
     win = MainWindow(manager, config, bridge)
     bridge.added.connect(win.on_remote_add)
+    bridge.confirm.connect(win.open_confirm)
     try:
-        server, moved = start_server(manager, config, on_add=lambda d: bridge.added.emit(d.id))
+        server, moved = start_server(manager, config, on_add=lambda d: bridge.added.emit(d.id),
+                                   on_confirm=lambda u, h, k: bridge.confirm.emit(u, h, k))
         if moved:
             manager.events.append(f"المنفذ {server.wanted_port} مشغول بنسخة أخرى من سيل أو برنامج آخر، "
                                   f"فاستخدمنا {server.port}. أغلق النسخ القديمة من مدير المهام.")

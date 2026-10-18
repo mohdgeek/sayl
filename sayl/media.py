@@ -360,7 +360,21 @@ class MediaDownload:
             if clients:
                 opts["extractor_args"] = {"youtube": {"player_client": clients}}
             try:
-                return self._attempt(opts)
+                try:
+                    return self._attempt(opts)
+                except DownloadCancelled:
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    if self.subs and "subtitle" in (log.last_error or str(e)).lower() and not self._stop.is_set():
+                        # فشل جلب الترجمة (مثل 429) لا يجب أن يُفشل الفيديو: أعد المحاولة بدونها
+                        self.subs = []
+                        log.last_error = ""
+                        opts = self._build_opts(log)
+                        opts.update(js_runtime_opts())
+                        if clients:
+                            opts["extractor_args"] = {"youtube": {"player_client": clients}}
+                        return self._attempt(opts)
+                    raise
             except DownloadCancelled:
                 raise
             except Exception as e:  # noqa: BLE001

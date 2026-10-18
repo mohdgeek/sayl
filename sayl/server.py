@@ -53,7 +53,7 @@ def _disk_token(config):
         return ""
 
 
-def make_handler(manager, config, on_add=None):
+def make_handler(manager, config, on_add=None, on_confirm=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "Sayl"
 
@@ -123,11 +123,29 @@ def make_handler(manager, config, on_add=None):
                 if self.path != "/ping":
                     self._send(404, {"ok": False})
 
+        def _probe(self):
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                if n <= 0 or n > MAX_BODY:
+                    raise ValueError("size")
+                data = json.loads(self.rfile.read(n))
+                from . import media
+                info = media.probe(str(data["url"]), data.get("headers"), max_entries=1)
+                self._send(200, {"ok": True, "title": info.get("title", ""), "duration": info.get("duration"),
+                                 "heights": info.get("heights", []), "playlist": bool(info.get("playlist")),
+                                 "is_live": bool(info.get("is_live"))})
+            except (ValueError, KeyError, TypeError) as e:
+                self._send(400, {"ok": False, "error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                self._send(200, {"ok": False, "error": str(e)[:300]})
+
         def do_POST(self):
-            if self.path != "/add":
+            if self.path not in ("/add", "/probe"):
                 return self._send(404, {"ok": False})
             if not self._check():
                 return
+            if self.path == "/probe":
+                return self._probe()
             try:
                 n = int(self.headers.get("Content-Length", "0"))
                 if n <= 0 or n > MAX_BODY:
@@ -143,6 +161,10 @@ def make_handler(manager, config, on_add=None):
                 height = int(height) if height else None
                 if height is not None and not 100 <= height <= 4320:
                     raise ValueError("height")
+                if data.get("confirm") and on_confirm:       # يفتح البرنامج نافذة اختيار الجودة والمجلد
+                    on_confirm(url, hdrs, kind)
+                    self._send(200, {"ok": True, "confirm": True})
+                    return
                 try:
                     d = manager.add(url, headers=hdrs, filename=data.get("filename") or None,
                                     kind=kind, height=height,
@@ -172,18 +194,18 @@ class _Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-def start_server(manager, config, on_add=None):
+def start_server(manager, config, on_add=None, on_confirm=None):
     """يشغّل الخادم على المنفذ المضبوط، وإن كان مشغولًا يختار منفذًا حرًّا ويحفظه في الإعدادات.
 
     يعيد (الخادم، هل تغيّر المنفذ؟). الجسر يقرأ المنفذ من ملف الإعدادات فيتبع التغيير تلقائيًا.
     """
     wanted = int(config["port"])
     try:
-        srv = ApiServer(manager, config, on_add)
+        srv = ApiServer(manager, config, on_add, on_confirm)
         fell_back = False
     except OSError:
         config["port"] = 0
-        srv = ApiServer(manager, config, on_add)
+        srv = ApiServer(manager, config, on_add, on_confirm)
         config["port"] = srv.port
         config.save()
         fell_back = True
@@ -193,9 +215,9 @@ def start_server(manager, config, on_add=None):
 
 
 class ApiServer:
-    def __init__(self, manager, config, on_add=None):
+    def __init__(self, manager, config, on_add=None, on_confirm=None):
         self.httpd = _Server(("127.0.0.1", int(config["port"])),
-                             make_handler(manager, config, on_add))
+                             make_handler(manager, config, on_add, on_confirm))
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     @property

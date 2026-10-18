@@ -165,11 +165,18 @@ def host_command():
     """مسار ملف تنفيذي يشغّل الجسر: SaylHost.exe في النسخة المُغلَّفة، أو سكربت صغير أثناء التطوير."""
     if getattr(sys, "frozen", False):
         src = resource_path(os.path.join("host", "SaylHost.exe"))
-        dst = os.path.join(APP_DIR, "SaylHost.exe")
+        # اسم يحمل الإصدار: ملف الجسر القديم قد يكون قيد التشغيل (مقفلًا) فلا يمكن الكتابة فوقه
+        dst = os.path.join(APP_DIR, f"SaylHost-{_app_version()}.exe")
         if os.path.isfile(src):
             os.makedirs(APP_DIR, exist_ok=True)
             if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
                 shutil.copyfile(src, dst)
+            for n in os.listdir(APP_DIR):
+                if n.startswith("SaylHost") and n.endswith(".exe") and n != os.path.basename(dst):
+                    try:
+                        os.remove(os.path.join(APP_DIR, n))
+                    except OSError:
+                        pass                      # ما زال قيد التشغيل: يُحذف لاحقًا
         return dst
     run_host = resource_path("run_host.py")
     os.makedirs(APP_DIR, exist_ok=True)

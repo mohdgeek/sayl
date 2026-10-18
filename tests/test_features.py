@@ -386,3 +386,22 @@ def test_refresh_extension_updates_stale_copy(tmp_path, monkeypatch):
     (dest / "pair.json").write_text(json.dumps({"port": cfg["port"], "token": cfg["token"], "version": "0.0.1"}))
     setup_tools.refresh_extension(cfg)
     assert json.loads((dest / "pair.json").read_text())["version"] != "0.0.1"
+
+
+def test_probe_and_confirm_api(tmp_path, monkeypatch):
+    cfg, mgr, _ = mk(tmp_path)
+    got = []
+    monkeypatch.setattr(media, "probe", lambda url, headers=None, max_entries=300: {
+        "title": "T", "duration": 5, "heights": [1080, 720], "playlist": False})
+    api = ApiServer(mgr, cfg, on_confirm=lambda u, h, k: got.append((u, k)))
+    api.start()
+    base, h = f"http://127.0.0.1:{api.port}", {"X-Sayl-Token": cfg["token"]}
+    try:
+        p = requests.post(base + "/probe", headers=h, json={"url": "https://youtu.be/x"}).json()
+        assert p["ok"] and p["heights"] == [1080, 720]
+        c = requests.post(base + "/add", headers=h, json={"url": "https://youtu.be/x", "kind": "media",
+                                                         "confirm": True}).json()
+        assert c["confirm"] and got == [("https://youtu.be/x", "media")] and not mgr.items
+    finally:
+        api.stop()
+        mgr.shutdown()

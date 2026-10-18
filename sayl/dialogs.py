@@ -174,6 +174,9 @@ class AddDialog(QDialog):
         self._manual = video       # إن اختار المستخدم النوع بنفسه لا نغيّره تلقائيًا
         self._set_mode(video, manual=False)
         self._on_text()
+        if video and urls.strip():             # قادم من الإضافة: اعرض الجودات المتاحة فورًا
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(150, self._start_probe)
 
     # ---- المنطق
     def _first_url(self):

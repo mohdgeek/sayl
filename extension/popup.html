@@ -19,7 +19,7 @@
   .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
   .head b { font-size: 14px; }
   ul { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; overflow-x: hidden; display: grid; gap: 7px; }
-  li { min-width: 0; display: flex; align-items: center; gap: 10px; background: var(--surface); border-radius: 12px; padding: 9px 10px 9px 12px; }
+  li { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: var(--surface); border-radius: 12px; padding: 9px 10px 9px 12px; }
   .type { flex: none; min-width: 46px; text-align: center; font-size: 11px; font-weight: 700; border-radius: 7px; padding: 3px 7px;
           background: rgba(139,124,255,.16); color: #8B7CFF; }
   .type.hls { background: rgba(255,176,32,.16); color: var(--accent); }
@@ -33,6 +33,10 @@
   #msg { margin-top: 10px; min-height: 16px; font-size: 12px; }
   .ok { color: var(--ok); } .bad { color: var(--err); }
   #setup { display: none; text-align: center; padding: 8px 0 2px; line-height: 1.8; }
+  .chips{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;color:var(--muted,#8a93a6);font-size:12px}
+  .chip{border:1px solid rgba(255,176,32,.5);background:transparent;color:#FFB020;border-radius:999px;padding:3px 11px;
+        font:600 12px "Segoe UI",Tahoma,sans-serif;cursor:pointer}
+  .chip:hover{background:#FFB020;color:#1B1300}
 </style>
 </head>
 <body>

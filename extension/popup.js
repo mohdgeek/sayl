@@ -1,10 +1,25 @@
 const $ = (id) => document.getElementById(id);
 const say = (text, ok) => { const m = $("msg"); m.textContent = text; m.className = ok ? "ok" : "bad"; };
 
-async function send(url, kind, referrer) {
-  const res = await chrome.runtime.sendMessage({ type: "send", url, kind, referrer });
-  if (res && res.ok) say("تمت الإضافة إلى سيل", true);
+async function send(url, kind, referrer, extra = {}) {
+  const res = await chrome.runtime.sendMessage({ type: "send", url, kind, referrer, ...extra });
+  if (res && res.ok) say(extra.confirm === false || kind !== "media" ? "تمت الإضافة إلى سيل" : "اختر الجودة في نافذة سيل", true);
   else say((res && res.error) || "تعذّر الاتصال بالبرنامج", false);
+}
+
+async function loadFormats(url, tabUrl, box) {
+  const r = await chrome.runtime.sendMessage({ type: "formats", url }).catch(() => null);
+  box.textContent = "";
+  if (!r || !r.ok) { box.textContent = (r && r.error) ? "تعذّر جلب الجودات" : ""; box.title = (r && r.error) || ""; return; }
+  const add = (label, extra) => {
+    const c = document.createElement("button");
+    c.className = "chip";
+    c.textContent = label;
+    c.addEventListener("click", () => send(url, "media", tabUrl, { ...extra, confirm: false }));
+    box.append(c);
+  };
+  for (const h of (r.heights || []).slice(0, 8)) add(h + "p", { height: h });
+  add("MP3", { audio_only: true });
 }
 
 function render(list, tabUrl) {
@@ -35,6 +50,13 @@ function render(list, tabUrl) {
     b.textContent = "تحميل";
     b.addEventListener("click", () => send(e.url, e.kind === "manifest" || e.kind === "page" ? "media" : "auto", tabUrl));
     li.append(type, meta, b);
+    if (e.kind === "page") {
+      const chips = document.createElement("div");
+      chips.className = "chips";
+      chips.textContent = "جارٍ جلب الجودات…";
+      li.append(chips);
+      loadFormats(e.url, tabUrl, chips);
+    }
     ul.append(li);
   }
 }

@@ -11,10 +11,11 @@ async function showStatus() {
   }
 }
 
-chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0 }).then((s) => {
+chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0, confirmVideo: true }).then((s) => {
   $("port").value = s.port;
   $("token").value = s.token;
   $("enabled").checked = s.enabled;
+  $("confirmVideo").checked = s.confirmVideo;
   $("minSizeMB").value = s.minSizeMB;
 });
 showStatus();
@@ -24,6 +25,7 @@ $("save").addEventListener("click", async () => {
     port: parseInt($("port").value, 10) || 6800,
     token: $("token").value.trim(),
     enabled: $("enabled").checked,
+    confirmVideo: $("confirmVideo").checked,
     minSizeMB: parseInt($("minSizeMB").value, 10) || 0,
   });
   const st = $("status");
