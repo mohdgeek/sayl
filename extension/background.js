@@ -11,6 +11,10 @@ async function syncPair() {
     const r = await fetch(chrome.runtime.getURL("pair.json"));
     if (!r.ok) return;
     const p = await r.json();
+    if (p && p.version && p.version !== chrome.runtime.getManifest().version) {
+      chrome.runtime.reload();                       // ملفات الإضافة حُدّثت من البرنامج: أعد تحميل نفسك
+      return;
+    }
     if (p && p.token) await chrome.storage.local.set({ port: p.port || 6800, token: p.token });
   } catch (e) { /* لا يوجد ملف: إدخال يدوي من الخيارات */ }
 }
@@ -238,6 +242,6 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 // نبضة كل 30 ثانية: تُظهر للبرنامج أن الإضافة متصلة، وتربط نفسها تلقائيًا متى فُتحت نافذة الربط
 chrome.alarms.create("sayl-ping", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "sayl-ping") api("/ping").catch(() => {});
+  if (a.name === "sayl-ping") { syncPair(); api("/ping").catch(() => {}); }
 });
 api("/ping").catch(() => {});

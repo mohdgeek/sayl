@@ -703,6 +703,10 @@ def main():
         setup_tools.register_native_host(config)      # يجعل الإضافة تعمل بلا رمز ولا منفذ
     except Exception as e:  # noqa: BLE001
         setup_tools.log(f"فشل تسجيل الجسر: {e!r}")
+    try:
+        setup_tools.refresh_extension(config)
+    except Exception as e:  # noqa: BLE001
+        setup_tools.log(f"فشل تحديث ملفات الإضافة: {e!r}")
     manager = DownloadManager(config)
     bridge = Bridge()
     win = MainWindow(manager, config, bridge)

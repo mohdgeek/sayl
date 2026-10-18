@@ -305,7 +305,7 @@ class MediaDownload:
             "format": build_format(self.height, self.audio_only, bool(ff)),
             "http_headers": dict(self.headers), "progress_hooks": [self._hook],
             "socket_timeout": 20, "retries": 8, "fragment_retries": 8, "continuedl": True,
-            "concurrent_fragment_downloads": 4, "restrictfilenames": False,
+            "concurrent_fragment_downloads": 16, "restrictfilenames": False,
             "windowsfilenames": True, "overwrites": False,
         }
         if self.limiter.rate > 0:
@@ -348,6 +348,12 @@ class MediaDownload:
     def _attempt_all(self, log):
         yt = "youtu" in self.url
         last = None
+        try:
+            from .setup_tools import log as _syslog
+            _syslog(f"media: yt-dlp {getattr(yt_dlp.version, '__version__', '?')} "
+                f"js={list(js_runtime_opts().get('js_runtimes', {})) or 'none'} url={self.url[:80]}")
+        except Exception:  # noqa: BLE001
+            pass
         for clients in (_CLIENTS if yt else (None,)):
             opts = self._build_opts(log)
             opts.update(js_runtime_opts())

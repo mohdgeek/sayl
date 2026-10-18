@@ -19,6 +19,24 @@ def default_extension_dir():
     return os.path.join(docs if os.path.isdir(docs) else APP_DIR, EXT_NAME)
 
 
+def _app_version():
+    from . import __version__
+    return __version__
+
+
+def refresh_extension(config):
+    """إن كانت الإضافة مصدَّرة سابقًا بنسخة أقدم، نحدّث ملفاتها بصمت (الإضافة تُعيد تحميل نفسها)."""
+    dest = default_extension_dir()
+    try:
+        with open(os.path.join(dest, "pair.json"), encoding="utf-8") as f:
+            old = json.load(f)
+        if old.get("version") != _app_version() or old.get("token") != config["token"] \
+                or old.get("port") != int(config["port"]):
+            export_extension(config, dest)
+    except (OSError, ValueError):
+        pass
+
+
 def export_extension(config, dest=None):
     """ينسخ الإضافة إلى مجلد ثابت ويكتب فيها الرمز والمنفذ، فلا يلصق المستخدم شيئًا يدويًا."""
     src = resource_path("extension")
@@ -30,7 +48,8 @@ def export_extension(config, dest=None):
     shutil.copytree(src, dest)
     pair = os.path.join(dest, "pair.json")
     with open(pair, "w", encoding="utf-8") as f:
-        json.dump({"port": int(config["port"]), "token": config["token"]}, f)
+        json.dump({"port": int(config["port"]), "token": config["token"],
+                   "version": _app_version()}, f)
     try:
         os.chmod(pair, 0o600)
     except OSError:

@@ -373,3 +373,16 @@ def test_clean_headers_for_youtube():
     h = {"Cookie": "a=b", "User-Agent": "x", "Referer": "https://www.youtube.com/"}
     assert media.clean_headers("https://www.youtube.com/watch?v=1", h) == {"Referer": "https://www.youtube.com/"}
     assert media.clean_headers("https://cdn.example.com/a.m3u8", h) == h
+
+
+def test_refresh_extension_updates_stale_copy(tmp_path, monkeypatch):
+    import json
+    from sayl import setup_tools
+    from sayl.config import Config
+    cfg = Config(str(tmp_path / "c.json"))
+    dest = tmp_path / "ext"
+    monkeypatch.setattr(setup_tools, "default_extension_dir", lambda: str(dest))
+    setup_tools.export_extension(cfg, str(dest))
+    (dest / "pair.json").write_text(json.dumps({"port": cfg["port"], "token": cfg["token"], "version": "0.0.1"}))
+    setup_tools.refresh_extension(cfg)
+    assert json.loads((dest / "pair.json").read_text())["version"] != "0.0.1"

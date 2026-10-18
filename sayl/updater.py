@@ -132,5 +132,8 @@ def ensure_js_runtime():
         with zipfile.ZipFile(zp) as z:
             z.extract("deno.exe", d)
         os.remove(zp)
-    except Exception:  # noqa: BLE001
-        pass
+        from .setup_tools import log
+        log("تم تنزيل deno لفك توقيع يوتيوب")
+    except Exception as e:  # noqa: BLE001
+        from .setup_tools import log
+        log(f"فشل تنزيل deno: {e!r}")
