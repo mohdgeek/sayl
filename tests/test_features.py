@@ -178,3 +178,20 @@ def test_selfupdate_helpers(monkeypatch):
     info["asset_url"] = "https://evil.com/x"
     with pytest.raises(RuntimeError):
         su.download(info)
+
+
+def test_export_extension_pairs(tmp_path, monkeypatch):
+    import json
+    from sayl import setup_tools as st
+    cfg = Config(str(tmp_path / "c.json"))
+    dest = st.export_extension(cfg, str(tmp_path / "ext"))
+    assert os.path.isfile(os.path.join(dest, "manifest.json"))
+    p = json.load(open(os.path.join(dest, "pair.json")))
+    assert p["token"] == cfg["token"] and p["port"] == cfg["port"]
+    st.export_extension(cfg, dest)                      # إعادة التصدير فوق القديم تعمل
+    # أثناء التغليف تُقرأ الإضافة من _MEIPASS
+    fake = tmp_path / "meipass"
+    (fake / "extension").mkdir(parents=True)
+    (fake / "extension" / "manifest.json").write_text("{}")
+    monkeypatch.setattr(st.sys, "_MEIPASS", str(fake), raising=False)
+    assert st.resource_path("extension") == str(fake / "extension")

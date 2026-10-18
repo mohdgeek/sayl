@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
                                QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, 
                                QVBoxLayout, QWidget)
 
-from . import __version__, media, selfupdate, theme, updater
+from . import __version__, media, selfupdate, setup_tools, theme, updater
 from .media import find_ffmpeg, is_media_url
 from .widgets import ltr
 
@@ -438,6 +438,9 @@ class SettingsDialog(QDialog):
         self.clip.setChecked(c["clipboard_watch"])
         self.notify = QCheckBox("إشعار عند اكتمال التحميل")
         self.notify.setChecked(c["notify"])
+        self.autostart = QCheckBox("تشغيل سيل تلقائيًا مع ويندوز (يعمل في الخلفية)")
+        self.autostart.setChecked(setup_tools.autostart_enabled())
+        self.autostart.setVisible(setup_tools.autostart_supported())
         self.watch = QCheckBox("مراقبة مجلد: أي ملف .txt أو .url فيه روابط يُحمَّل تلقائيًا")
         self.watch.setChecked(c["watch_enabled"])
         self.watch_dir = QLineEdit(c["watch_folder"])
@@ -466,6 +469,7 @@ class SettingsDialog(QDialog):
         f.addRow("", self.dups)
         f.addRow("", self.clip)
         f.addRow("", self.notify)
+        f.addRow("", self.autostart)
         f.addRow("", self.watch)
         f.addRow("المجلد المراقَب", wrow)
         f.addRow("رمز الإضافة", trow)
@@ -794,7 +798,71 @@ class SettingsDialog(QDialog):
         c["subtitles"] = self.subs.isChecked()
         c["sub_langs"] = self.sub_langs.text().strip() or "ar,en"
         c["ffmpeg_path"] = self.ffmpeg.text().strip()
+        if setup_tools.autostart_supported():
+            try:
+                setup_tools.set_autostart(self.autostart.isChecked())
+            except OSError:
+                pass
         c["update_repo"] = selfupdate.clean_repo(self.repo.text())
         c["auto_update_check"] = self.auto_chk.isChecked()
         for k, v in self._sel.items():
             c[k] = v
+
+
+class WelcomeDialog(QDialog):
+    """نافذة الترحيب عند أول تشغيل: ثلاث خطوات واضحة لمن لا يعرف شيئًا."""
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self.setWindowTitle("مرحبًا بك في سيل")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 24, 26, 22)
+        lay.setSpacing(12)
+        t = QLabel("أهلًا بك في سيل 👋")
+        t.setObjectName("PageTitle")
+        lay.addWidget(t)
+        intro = QLabel("مدير تحميل سريع يقسّم الملف إلى أجزاء ويلتقط الفيديوهات من المتصفح. "
+                       "ابدأ بثلاث خطوات:")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        for n, txt in (("1", "ألصق أي رابط في النافذة الرئيسية، أو انسخه وسيقترح عليك سيل تحميله."),
+                       ("2", "لالتقاط الفيديوهات من Chrome ثبّت الإضافة بالزر أدناه (دقيقة واحدة)."),
+                       ("3", "في الإعدادات تجد الجدولة والألوان والتحديث التلقائي.")):
+            row = QLabel(f"<b>{n}.</b>  {txt}")
+            row.setWordWrap(True)
+            lay.addWidget(row)
+        self.msg = QLabel("")
+        self.msg.setObjectName("Sub")
+        self.msg.setWordWrap(True)
+        self.btn_ext = QPushButton("تثبيت إضافة Chrome")
+        self.btn_ext.setObjectName("Primary")
+        self.btn_ext.clicked.connect(self.install_extension)
+        done = QPushButton("ابدأ الاستخدام")
+        done.setObjectName("Ghost")
+        done.clicked.connect(self.accept)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(done)
+        btns.addWidget(self.btn_ext)
+        lay.addSpacing(6)
+        lay.addWidget(self.msg)
+        lay.addLayout(btns)
+
+    def install_extension(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        try:
+            path = setup_tools.export_extension(self.config)
+        except Exception as e:  # noqa: BLE001
+            self.msg.setText(f"تعذّر تجهيز الإضافة: {e}")
+            return
+        QApplication.clipboard().setText("chrome://extensions")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self.msg.setText(
+            "جهّزت الإضافة وفتحت مجلدها. الآن:\n"
+            "• افتح Chrome والصق في شريط العنوان: chrome://extensions (نسخته لك)\n"
+            "• فعّل «وضع المطوّر» من الأعلى\n"
+            "• اضغط «تحميل إضافة غير مُحزّمة» واختر المجلد الذي فُتح\n"
+            "لا حاجة لإدخال أي رمز: الإضافة مرتبطة تلقائيًا.")

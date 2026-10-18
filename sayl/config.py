@@ -45,7 +45,8 @@ DEFAULTS = {
     "peak_kb": 500,
     "after_all": "none",
     "update_repo": "mohdgeek/sayl",
-    "auto_update_check": True,       # none | quit | shutdown
+    "auto_update_check": True,
+    "welcomed": False,       # none | quit | shutdown
 }
 
 

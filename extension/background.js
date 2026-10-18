@@ -5,6 +5,18 @@ const DEFAULTS = { port: 6800, token: "", enabled: true, minSizeMB: 0 };
 const MAX_PER_TAB = 30;
 const getSettings = () => chrome.storage.local.get(DEFAULTS);
 
+// الإقران التلقائي: البرنامج يكتب pair.json (المنفذ والرمز) داخل مجلد الإضافة عند تصديرها
+async function syncPair() {
+  try {
+    const r = await fetch(chrome.runtime.getURL("pair.json"));
+    if (!r.ok) return;
+    const p = await r.json();
+    if (p && p.token) await chrome.storage.local.set({ port: p.port || 6800, token: p.token });
+  } catch (e) { /* لا يوجد ملف: إدخال يدوي من الخيارات */ }
+}
+syncPair();
+chrome.runtime.onStartup.addListener(syncPair);
+
 async function api(path, options = {}) {
   const { port, token } = await getSettings();
   const res = await fetch(`http://127.0.0.1:${port}${path}`, {

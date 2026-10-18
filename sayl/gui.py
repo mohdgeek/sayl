@@ -4,17 +4,17 @@ import os
 import sys
 import threading
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                                QPushButton, QStackedWidget, QSystemTrayIcon, QToolButton,
                                QVBoxLayout, QWidget)
 
-from . import icons, power, selfupdate, theme
+from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, category_of, ext_of
 from .config import Config
-from .dialogs import AddDialog, SettingsDialog
+from .dialogs import AddDialog, SettingsDialog, WelcomeDialog
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
 from .media import is_media_url
@@ -219,6 +219,8 @@ class MainWindow(QMainWindow):
         mm.addAction("استئناف الكل", self.manager.resume_all)
         mm.addSeparator()
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
+        mm.addSeparator()
+        mm.addAction("تثبيت إضافة Chrome…", self.show_welcome)
         mm.addSeparator()
         after = mm.addMenu("بعد انتهاء الطابور")
         self._after_acts = {}
@@ -588,6 +590,11 @@ class MainWindow(QMainWindow):
                 selfupdate.apply_and_restart(dlg.ready_path)
                 self.quit()
 
+    def show_welcome(self):
+        WelcomeDialog(self.config, self).exec()
+        self.config["welcomed"] = True
+        self.config.save()
+
     def check_updates_bg(self):
         """فحص صامت عند التشغيل؛ يظهر إشعار فقط إن وُجد إصدار أحدث."""
         repo = selfupdate.clean_repo(self.config["update_repo"])
@@ -675,10 +682,17 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    setup_tools.install_excepthook()
     app = QApplication(sys.argv)
     app.setLayoutDirection(Qt.RightToLeft)
     app.setQuitOnLastWindowClosed(False)
     config = Config()
+    os.makedirs(os.path.dirname(setup_tools.LOG_PATH), exist_ok=True)
+    lock = QLockFile(os.path.join(os.path.dirname(setup_tools.LOG_PATH), "sayl.lock"))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(100):
+        QMessageBox.information(None, "سيل", "سيل يعمل بالفعل. ابحث عن أيقونته بجانب الساعة.")
+        return
     app.setStyleSheet(theme.apply_config(config))
     manager = DownloadManager(config)
     bridge = Bridge()
@@ -690,9 +704,14 @@ def main():
     except OSError as e:
         QMessageBox.warning(win, "سيل", f"تعذّر فتح المنفذ {config['port']}: {e}\n"
                             "لن تعمل إضافة المتصفح حتى تغيّر المنفذ.")
-    win.show()
+    if "--minimized" not in sys.argv:
+        win.show()
+        if not config["welcomed"]:
+            QTimer.singleShot(400, win.show_welcome)
     win.check_updates_bg()
-    sys.exit(app.exec())
+    code = app.exec()
+    lock.unlock()
+    sys.exit(code)
 
 
 if __name__ == "__main__":

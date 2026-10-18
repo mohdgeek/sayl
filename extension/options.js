@@ -1,6 +1,13 @@
 const $ = (id) => document.getElementById(id);
 
-chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0 }).then((s) => {
+async function load() {
+  try {
+    const p = await (await fetch(chrome.runtime.getURL("pair.json"))).json();
+    if (p && p.token) await chrome.storage.local.set({ port: p.port || 6800, token: p.token });
+  } catch (e) { /* إدخال يدوي */ }
+  return chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0 });
+}
+load().then((s) => {
   $("port").value = s.port;
   $("token").value = s.token;
   $("enabled").checked = s.enabled;

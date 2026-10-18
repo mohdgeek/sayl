@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from sayl import theme  # noqa: E402
 from sayl.config import Config  # noqa: E402
-from sayl.dialogs import AddDialog, SettingsDialog  # noqa: E402
+from sayl.dialogs import AddDialog, SettingsDialog, WelcomeDialog  # noqa: E402
 from sayl.gui import Bridge, MainWindow, looks_downloadable  # noqa: E402
 from sayl.manager import DownloadManager  # noqa: E402
 from test_engine import SHA, make_server, sha_of  # noqa: E402
@@ -35,6 +35,10 @@ dlg = AddDialog(cfg, win, urls="https://www.youtube.com/watch?v=x")
 assert dlg.values()["kind"] == "media", "كشف تلقائي لرابط فيديو"
 dlg2 = AddDialog(cfg, win, urls="https://example.com/a.zip")
 assert dlg2.values()["kind"] == "http"
+wd = WelcomeDialog(cfg, win)
+wd.show()
+assert wd.btn_ext.text()
+wd.close()
 sd = SettingsDialog(cfg, win)
 assert sd.tabs.count() == 5
 sd._pick("accent", "#FF6FA5")

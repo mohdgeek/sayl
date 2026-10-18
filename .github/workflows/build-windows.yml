@@ -1,9 +1,10 @@
 name: Build and release Sayl.exe
 
+# يُنشر إصدار جديد تلقائيًا كلما غيّرت __version__ في sayl/__init__.py ودفعت إلى main.
 on:
   workflow_dispatch:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
@@ -13,18 +14,28 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Read version
+        id: v
+        shell: bash
+        run: |
+          ver=$(python -c "import re;print(re.search(r'\"([^\"]+)\"',open('sayl/__init__.py').read()).group(1))")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if gh release view "v$ver" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.v.outputs.exists == 'false'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt pyinstaller
-      - run: pyinstaller --noconfirm --clean --onefile --windowed --name Sayl --icon assets/icon.ico --collect-all yt_dlp run_sayl.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Sayl-windows
-          path: dist/Sayl.exe
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - if: steps.v.outputs.exists == 'false'
+        run: pip install -r requirements.txt pyinstaller
+      - if: steps.v.outputs.exists == 'false'
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name Sayl --icon assets/icon.ico --add-data "extension;extension" --collect-all yt_dlp run_sayl.py
+      - if: steps.v.outputs.exists == 'false'
+        name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.v.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: dist/Sayl.exe
           generate_release_notes: true

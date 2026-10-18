@@ -9,7 +9,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt pyinstaller || goto :err
 
 pyinstaller --noconfirm --clean --onefile --windowed --name Sayl ^
-  --icon assets\icon.ico --collect-all yt_dlp run_sayl.py || goto :err
+  --icon assets\icon.ico --add-data "extension;extension" --collect-all yt_dlp run_sayl.py || goto :err
 
 echo.
 echo Done: dist\Sayl.exe
