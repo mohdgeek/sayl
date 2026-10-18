@@ -290,4 +290,9 @@ def self_test_host(timeout=20):
         return False, "الجسر لم يردّ خلال المهلة. " + err
     if r.get("status") == 200:
         return True, "الجسر يعمل ويتصل بسيل"
+    j = r.get("json") or {}
+    if r.get("status") == 401:
+        return False, (f"الرمز لا يطابق. بصمة الجسر: {j.get('host_fp')} | بصمة البرنامج: {j.get('server_fp')} | "
+                       f"ملف الجسر: {j.get('host_cfg')} (موجود: {j.get('host_cfg_exists')}) | "
+                       f"ملف البرنامج: {j.get('server_cfg')}")
     return False, f"الجسر ردّ بخطأ: {r}"

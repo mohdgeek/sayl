@@ -42,6 +42,11 @@ def write_message(stream, obj):
     stream.flush()
 
 
+def _fp(tok):
+    import hashlib
+    return hashlib.sha256(tok.encode()).hexdigest()[:8] if tok else "empty"
+
+
 def _call(cfg, msg, timeout=30):
     url = f"http://127.0.0.1:{int(cfg.get('port') or 6800)}{msg['path']}"
     body = json.dumps(msg["body"]).encode() if msg.get("body") is not None else None
@@ -56,6 +61,10 @@ def _call(cfg, msg, timeout=30):
             payload = json.load(e)
         except ValueError:
             payload = {}
+        if e.code == 401:      # معلومات تشخيص (بصمات مختصرة، لا الرمز نفسه)
+            payload["host_fp"] = _fp(cfg.get("token", ""))
+            payload["host_cfg"] = CONFIG
+            payload["host_cfg_exists"] = os.path.isfile(CONFIG)
         return {"status": e.code, "json": payload}
 
 

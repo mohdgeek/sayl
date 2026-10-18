@@ -34,6 +34,24 @@ def open_pairing(seconds=300):
     _PAIR["until"] = time.time() + seconds
 
 
+def _fp(tok):
+    import hashlib
+    return hashlib.sha256((tok or "").encode()).hexdigest()[:8] if tok else "empty"
+
+
+def _tok_ok(given, expected):
+    return bool(expected) and hmac.compare_digest((given or "").encode(), expected.encode())
+
+
+def _disk_token(config):
+    """الرمز المحفوظ في ملف الإعدادات الآن (يعالج حالة أن عملية قديمة تحمل رمزًا قديمًا في الذاكرة)."""
+    try:
+        with open(config.path, "r", encoding="utf-8") as f:
+            return str(json.load(f).get("token") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def make_handler(manager, config, on_add=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "Sayl"
@@ -64,10 +82,11 @@ def make_handler(manager, config, on_add=None):
                 return False
             native = self.headers.get("X-Sayl-Via") == "native"
             tok = self.headers.get("X-Sayl-Token", "")
-            if not hmac.compare_digest(tok.encode(), config["token"].encode()):
+            if not (_tok_ok(tok, config["token"]) or _tok_ok(tok, _disk_token(config))):
                 if origin or native:
                     STATS["bad"] = time.time()
-                self._send(401, {"ok": False, "error": "token"})
+                self._send(401, {"ok": False, "error": "token", "server_fp": _fp(config["token"]),
+                                 "server_cfg": getattr(config, "path", "")})
                 return False
             if origin or native:
                 STATS["seen"] = time.time()

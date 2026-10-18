@@ -309,3 +309,25 @@ def test_self_test_host_and_status(tmp_path, monkeypatch):
     assert not ok
     st.register_native_host(extra_dirs=[str(tmp_path / "nm")], registry=False)
     assert all(ok for _, ok in st.native_status())
+
+
+def test_token_selfheal_from_disk(tmp_path):
+    """عملية تحمل رمزًا قديمًا في الذاكرة تقبل الرمز الحالي في الملف."""
+    from sayl import host
+    cfg, mgr, _ = mk(tmp_path)
+    api = ApiServer(mgr, cfg)
+    api.start()
+    try:
+        cfg.data["token"] = "stale-in-memory"          # الذاكرة قديمة
+        disk = {"port": api.port, "token": "fresh-on-disk"}
+        import json as _j
+        p = _j.load(open(cfg.path))
+        p["token"] = "fresh-on-disk"
+        _j.dump(p, open(cfg.path, "w"))                  # الملف أحدث
+        r = host.handle({"id": 1, "path": "/ping"}, disk, launch=False)
+        assert r["status"] == 200
+        r = host.handle({"id": 2, "path": "/ping"}, {"port": api.port, "token": "wrong"}, launch=False)
+        assert r["status"] == 401 and r["json"]["server_fp"] and r["json"]["host_fp"]
+    finally:
+        api.stop()
+        mgr.shutdown()
