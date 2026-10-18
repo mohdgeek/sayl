@@ -90,3 +90,39 @@ def install_excepthook():
         except OSError:
             pass
     sys.excepthook = hook
+
+
+# ------------------------------------------------------------ المتصفحات
+def _win_paths(*rels):
+    out = []
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+        base = os.environ.get(var)
+        if base:
+            out += [os.path.join(base, r) for r in rels]
+    return out
+
+
+BROWSERS = [
+    ("chrome", "Google Chrome", "chrome", ("Google/Chrome/Application/chrome.exe",), "google-chrome"),
+    ("edge", "Microsoft Edge", "edge", ("Microsoft/Edge/Application/msedge.exe",), "microsoft-edge"),
+    ("brave", "Brave", "brave", ("BraveSoftware/Brave-Browser/Application/brave.exe",), "brave-browser"),
+    ("opera", "Opera", "opera", ("Programs/Opera/opera.exe", "Opera/opera.exe"), "opera"),
+    ("vivaldi", "Vivaldi", "vivaldi", ("Vivaldi/Application/vivaldi.exe",), "vivaldi"),
+]
+
+
+def find_browsers():
+    """يعيد قائمة dict: key, name, scheme, exe (أو None إن لم يُعثر عليه)."""
+    out = []
+    for key, name, scheme, rels, cmd in BROWSERS:
+        exe = next((p for p in _win_paths(*rels) if os.path.isfile(p)), None)
+        exe = exe or shutil.which(cmd)
+        out.append({"key": key, "name": name, "scheme": scheme, "exe": exe})
+    return out
+
+
+def open_extensions_page(browser):
+    import subprocess
+    if not browser.get("exe"):
+        raise FileNotFoundError(browser["name"])
+    subprocess.Popen([browser["exe"], f"{browser['scheme']}://extensions"])

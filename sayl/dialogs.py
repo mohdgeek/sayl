@@ -385,6 +385,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._schedule(), "الجدولة")
         tabs.addTab(self._video(), "الفيديو")
         tabs.addTab(self._look(), "المظهر")
+        tabs.addTab(self._browsers(), "المتصفحات")
         tabs.addTab(self._app_update(), "التحديث")
         self.tabs = tabs
 
@@ -565,6 +566,104 @@ class SettingsDialog(QDialog):
     _app_res = Signal(object, str)
     _app_prog = Signal(float)
 
+    # ------------------------------------------------------------ المتصفحات
+    def _browsers(self):
+        from PySide6.QtCore import QTimer
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(6, 16, 6, 6)
+        lay.setSpacing(10)
+        intro = QLabel("ثبّت إضافة سيل في أي متصفح مبني على Chromium. اضغط «تثبيت» بجانب المتصفح، "
+                       "فنجهّز لك مجلد الإضافة ونفتح صفحة الإضافات فيه، ثم: فعّل «وضع المطوّر» ← "
+                       "«تحميل إضافة غير مُحزّمة» ← اختر المجلد. بعدها تُربط تلقائيًا خلال نصف دقيقة.")
+        intro.setWordWrap(True)
+        intro.setObjectName("Sub")
+        lay.addWidget(intro)
+        self._browser_rows = []
+        for b in setup_tools.find_browsers():
+            row = QHBoxLayout()
+            name = QLabel(b["name"] + ("" if b["exe"] else "  (غير مثبّت)"))
+            btn = QPushButton("تثبيت الإضافة")
+            btn.setObjectName("Ghost")
+            btn.setEnabled(bool(b["exe"]))
+            btn.clicked.connect(lambda _=False, br=b: self._install_in(br))
+            row.addWidget(name, 1)
+            row.addWidget(btn)
+            lay.addLayout(row)
+            self._browser_rows.append((b, name, btn))
+        self.ext_msg = QLabel("")
+        self.ext_msg.setWordWrap(True)
+        self.ext_msg.setObjectName("Sub")
+        self.ext_state = QLabel("")
+        self.ext_state.setWordWrap(True)
+        btn_pair = QPushButton("ربط الإضافة الآن")
+        btn_pair.setObjectName("Primary")
+        btn_pair.clicked.connect(self._pair_now)
+        btn_folder = QPushButton("فتح مجلد الإضافة")
+        btn_folder.setObjectName("Ghost")
+        btn_folder.clicked.connect(self._open_ext_folder)
+        r2 = QHBoxLayout()
+        r2.addWidget(btn_folder)
+        r2.addStretch(1)
+        r2.addWidget(btn_pair)
+        lay.addSpacing(6)
+        lay.addWidget(self.ext_state)
+        lay.addWidget(self.ext_msg)
+        lay.addLayout(r2)
+        lay.addStretch(1)
+        note = QLabel("متصفح Firefox غير مدعوم حاليًا.")
+        note.setObjectName("Sub")
+        lay.addWidget(note)
+        self._ext_timer = QTimer(self)
+        self._ext_timer.timeout.connect(self._refresh_ext_state)
+        self._ext_timer.start(1500)
+        self._refresh_ext_state()
+        return box
+
+    def _refresh_ext_state(self):
+        import time
+        from . import server as sv
+        now = time.time()
+        seen, bad = sv.STATS["seen"], sv.STATS["bad"]
+        if seen and now - seen < 75:
+            who = f" ({sv.STATS['browser']})" if sv.STATS["browser"] else ""
+            self.ext_state.setText(f"<b style='color:{theme.C['ok']}'>● الإضافة متصلة{who}</b>")
+        elif bad and now - bad < 75:
+            self.ext_state.setText(f"<b style='color:{theme.C['err']}'>● الإضافة تحاول الاتصال برمز خاطئ</b>"
+                                   " — اضغط «ربط الإضافة الآن» وانتظر نصف دقيقة.")
+        else:
+            self.ext_state.setText("<b>● لم تتصل أي إضافة بعد</b> — ثبّتها من الأعلى ثم اضغط «ربط الإضافة الآن».")
+
+    def _pair_now(self):
+        from .server import open_pairing
+        open_pairing(300)
+        self.ext_msg.setText("فُتحت نافذة الربط لمدة 5 دقائق. الإضافة ستربط نفسها تلقائيًا خلال 30 ثانية، "
+                             "أو افتح نافذتها المنبثقة في المتصفح لتسريع ذلك.")
+
+    def _install_in(self, browser):
+        from .server import open_pairing
+        try:
+            path = setup_tools.export_extension(self.config)
+            open_pairing(600)
+            setup_tools.open_extensions_page(browser)
+        except Exception as e:  # noqa: BLE001
+            self.ext_msg.setText(f"تعذّر التثبيت: {e}")
+            return
+        self._ext_path = path
+        self.ext_msg.setText(
+            f"تم تجهيز الإضافة وفتح {browser['name']}. في صفحة الإضافات: فعّل «وضع المطوّر» ثم "
+            f"«تحميل إضافة غير مُحزّمة» واختر المجلد:\n{path}")
+
+    def _open_ext_folder(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        try:
+            path = setup_tools.export_extension(self.config)
+        except Exception as e:  # noqa: BLE001
+            self.ext_msg.setText(f"تعذّر تجهيز الإضافة: {e}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
     # ------------------------------------------------------------ تحديث البرنامج
     def _app_update(self):
         c = self.config
@@ -694,6 +793,7 @@ class SettingsDialog(QDialog):
         reset = QPushButton("استعادة الألوان الافتراضية")
         reset.setObjectName("Ghost")
         reset.clicked.connect(self._reset_colors)
+        self.reset_btn = reset
         lay.addWidget(reset, 0, Qt.AlignRight)
         lay.addStretch(1)
         return box
@@ -742,8 +842,12 @@ class SettingsDialog(QDialog):
             self._sel["theme"], self._sel["dark_base"] = "dark", b
         self._preview()
 
-    def _reset_colors(self):
-        self._sel.update(accent="#FFB020", ok_color="", err_color="")
+    def _reset_colors(self, *_):
+        """يعيد السمة والألوان كلها إلى الافتراضي (داكن + إبراز كهرماني)."""
+        self._sel.update(theme="dark", dark_base="dark", accent="#FFB020", ok_color="", err_color="")
+        self.base_combo.blockSignals(True)
+        self.base_combo.setCurrentIndex(max(0, self.base_combo.findData("dark")))
+        self.base_combo.blockSignals(False)
         self._preview()
 
     def _preview(self):

@@ -18,6 +18,15 @@ MAX_BODY = 64 * 1024
 
 
 _PAIR = {"until": 0.0}
+STATS = {"seen": 0.0, "browser": "", "bad": 0.0}   # آخر اتصال ناجح من الإضافة، ومحاولة برمز خاطئ
+
+
+def _browser_of(ua):
+    for key, name in (("Edg/", "Edge"), ("OPR/", "Opera"), ("Vivaldi", "Vivaldi"),
+                      ("Firefox", "Firefox"), ("Chrome", "Chrome")):
+        if key in ua:
+            return name
+    return ""
 
 
 def open_pairing(seconds=300):
@@ -55,8 +64,13 @@ def make_handler(manager, config, on_add=None):
                 return False
             tok = self.headers.get("X-Sayl-Token", "")
             if not hmac.compare_digest(tok.encode(), config["token"].encode()):
+                if origin:
+                    STATS["bad"] = time.time()
                 self._send(401, {"ok": False, "error": "token"})
                 return False
+            if origin:
+                STATS["seen"] = time.time()
+                STATS["browser"] = _browser_of(self.headers.get("User-Agent", ""))
             return True
 
         def do_OPTIONS(self):

@@ -169,3 +169,11 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   })();
   return true;                                            // استجابة غير متزامنة
 });
+
+
+// نبضة كل 30 ثانية: تُظهر للبرنامج أن الإضافة متصلة، وتربط نفسها تلقائيًا متى فُتحت نافذة الربط
+chrome.alarms.create("sayl-ping", { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "sayl-ping") api("/ping").catch(() => {});
+});
+api("/ping").catch(() => {});

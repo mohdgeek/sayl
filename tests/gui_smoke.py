@@ -40,13 +40,20 @@ wd.show()
 assert wd.btn_ext.text()
 wd.close()
 sd = SettingsDialog(cfg, win)
-assert sd.tabs.count() == 5
+assert sd.tabs.count() == 6
 sd._pick("accent", "#FF6FA5")
 assert theme.C["accent"] == "#FF6FA5" and theme.C["on_accent"] == "#1B1300"
 sd._pick("accent", "#222222")
 assert theme.C["on_accent"] == "#FFFFFF"             # نص مقروء على لون داكن
 sd.base_combo.setCurrentIndex(sd.base_combo.findData("midnight"))
 assert theme.C["bg"] == "#0B1020"
+sd.base_combo.setCurrentIndex(sd.base_combo.findData("light"))
+assert theme.NAME == "light"
+sd._pick("err_color", "#123456")
+sd.reset_btn.click()                                  # استعادة الافتراضي: السمة والألوان كلها
+assert theme.NAME == "dark" and theme.C["bg"] == theme.DARK["bg"]
+assert theme.C["accent"] == "#FFB020" and theme.C["err"] == theme.DARK["err"]
+assert sd.base_combo.currentData() == "dark"
 sd.reject()                                           # الإلغاء يعيد السمة
 assert theme.C["accent"] == "#FFB020" and theme.C["bg"] == theme.DARK["bg"]
 sd2 = SettingsDialog(cfg, win)

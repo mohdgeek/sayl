@@ -113,7 +113,7 @@ dlg.grab().save(os.path.join(out, "playlist.png"))
 dlg.close()
 
 cfg["schedule_enabled"] = True
-for name, tab in (("general", 0), ("schedule", 1), ("video", 2), ("look", 3)):
+for name, tab in (("general", 0), ("schedule", 1), ("video", 2), ("look", 3), ("browsers", 4)):
     sd = SettingsDialog(cfg, win)
     sd.tabs.setCurrentIndex(tab)
     sd.show()

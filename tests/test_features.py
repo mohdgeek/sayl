@@ -225,3 +225,27 @@ def test_update_env_is_clean():
                         "_PYI_ARCHIVE_FILE": "a", "KEEP": "1"})
     assert not any(k.startswith("_PYI") or k == "_MEIPASS2" for k in env)
     assert env["KEEP"] == "1" and env["PATH"] == "x" and env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+
+def test_extension_stats_and_browsers(tmp_path, monkeypatch):
+    from sayl import server as sv, setup_tools as st
+    cfg, mgr, _ = mk(tmp_path)
+    api = ApiServer(mgr, cfg)
+    api.start()
+    base = f"http://127.0.0.1:{api.port}"
+    sv.STATS.update(seen=0.0, bad=0.0, browser="")
+    try:
+        h = {"Origin": "chrome-extension://abc", "User-Agent": "Mozilla Chrome/130 Edg/130"}
+        requests.get(base + "/ping", headers={**h, "X-Sayl-Token": "wrong"})
+        assert sv.STATS["bad"] > 0 and sv.STATS["seen"] == 0
+        requests.get(base + "/ping", headers={**h, "X-Sayl-Token": cfg["token"]})
+        assert sv.STATS["seen"] > 0 and sv.STATS["browser"] == "Edge"
+    finally:
+        api.stop()
+        mgr.shutdown()
+    fake = tmp_path / "msedge.exe"
+    fake.write_text("x")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    monkeypatch.setattr(st, "BROWSERS", [("edge", "Microsoft Edge", "edge", ("msedge.exe",), "nope")])
+    b = st.find_browsers()[0]
+    assert b["exe"] == str(fake) and b["scheme"] == "edge"
