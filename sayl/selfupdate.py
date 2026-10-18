@@ -108,6 +108,21 @@ def download(info, progress=None, timeout=30):
     return dest
 
 
+def clean_env(env=None):
+    """بيئة نظيفة لتشغيل نسخة جديدة من exe.
+
+    PyInstaller (وضع onefile) يضع متغيرات بيئة تجعل أي exe نشغّله من داخله يظن أنه تابع للنسخة الحالية
+    ويعيد استعمال مجلدها المؤقت _MEI*، وهذا المجلد يُحذف عند خروجنا، فيظهر الخطأ
+    «Failed to load Python DLL». لذلك نحذف هذه المتغيرات ونطلب إعادة ضبط البيئة.
+    """
+    env = dict(os.environ if env is None else env)
+    for k in list(env):
+        if k.startswith("_PYI") or k.upper() in ("_MEIPASS2", "PYINSTALLER_RESET_ENVIRONMENT"):
+            env.pop(k)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def apply_and_restart(new_path):
     """يكتب سكربت يستبدل exe بعد إغلاقنا ثم يشغّله. على المستدعي إغلاق البرنامج فورًا بعدها."""
     exe = sys.executable
@@ -118,11 +133,14 @@ def apply_and_restart(new_path):
             "set tries=0\r\n"
             ":retry\r\n"
             "set /a tries+=1\r\n"
-            "if %tries% gtr 30 exit /b 1\r\n"
+            "if %tries% gtr 40 exit /b 1\r\n"
             "timeout /t 1 /nobreak >nul\r\n"
             f'move /y "{new_path}" "{exe}" >nul 2>&1\r\n'
             "if errorlevel 1 goto retry\r\n"
+            "set _MEIPASS2=\r\n"
+            "set PYINSTALLER_RESET_ENVIRONMENT=1\r\n"
+            "timeout /t 2 /nobreak >nul\r\n"
             f'start "" "{exe}"\r\n'
             'del "%~f0"\r\n')
     flags = 0x00000008 | 0x08000000       # DETACHED_PROCESS | CREATE_NO_WINDOW
-    subprocess.Popen(["cmd", "/c", bat], creationflags=flags, close_fds=True)
+    subprocess.Popen(["cmd", "/c", bat], creationflags=flags, close_fds=True, env=clean_env())

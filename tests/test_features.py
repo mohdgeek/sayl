@@ -217,3 +217,11 @@ def test_pairing_window(tmp_path):
         sv._PAIR["until"] = 0
         api.stop()
         mgr.shutdown()
+
+
+def test_update_env_is_clean():
+    from sayl import selfupdate as su
+    env = su.clean_env({"PATH": "x", "_MEIPASS2": "C:/old", "_PYI_APPLICATION_HOME_DIR": "C:/old",
+                        "_PYI_ARCHIVE_FILE": "a", "KEEP": "1"})
+    assert not any(k.startswith("_PYI") or k == "_MEIPASS2" for k in env)
+    assert env["KEEP"] == "1" and env["PATH"] == "x" and env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
