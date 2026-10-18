@@ -210,3 +210,84 @@ def register_native_host(config=None, extra_dirs=None, registry=True):
         config["app_exe"] = sys.executable
         config.save()
     return written
+
+
+# ------------------------------------------------------------ تشخيص
+def log(msg):
+    import datetime
+    try:
+        os.makedirs(APP_DIR, exist_ok=True)
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+    except OSError:
+        pass
+
+
+def native_status():
+    """حالة تسجيل الجسر: قائمة (نص، سليم؟) تُعرض في تبويب المتصفحات."""
+    out = []
+    mf = os.path.join(APP_DIR, f"{HOST_NAME}.json")
+    host = None
+    try:
+        with open(mf, "r", encoding="utf-8") as f:
+            host = json.load(f)["path"]
+        out.append(("ملف تسجيل الجسر موجود", True))
+    except (OSError, ValueError, KeyError):
+        out.append(("ملف تسجيل الجسر غير موجود", False))
+    if host:
+        out.append((f"ملف الجسر موجود: {host}" if os.path.isfile(host) else f"ملف الجسر مفقود: {host}",
+                    os.path.isfile(host)))
+    if sys.platform.startswith("win"):
+        import winreg
+        for label, base in zip(("Chrome", "Edge", "Brave"), _WIN_NM_KEYS):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base + "\\" + HOST_NAME) as k:
+                    ok = winreg.QueryValueEx(k, "")[0] == mf
+            except OSError:
+                ok = False
+            out.append((f"مسجّل في {label}" if ok else f"غير مسجّل في {label}", ok))
+    return out
+
+
+def self_test_host(timeout=20):
+    """يشغّل ملف الجسر مباشرة (دون متصفح) ويرسل له ping: يكشف مشاكل الملف نفسه."""
+    import struct
+    import subprocess
+    import threading
+    try:
+        cmd = host_command()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
+        p = subprocess.Popen([cmd], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env=env)
+    except OSError as e:
+        return False, f"تعذّر تشغيل ملف الجسر: {e}"
+    msg = json.dumps({"id": 1, "path": "/ping", "method": "GET", "ua": "selftest"}).encode()
+    result = {}
+
+    def work():
+        try:
+            p.stdin.write(struct.pack("<I", len(msg)) + msg)
+            p.stdin.flush()
+            raw = p.stdout.read(4)
+            if len(raw) == 4:
+                result["r"] = json.loads(p.stdout.read(struct.unpack("<I", raw)[0]))
+        except (OSError, ValueError):
+            pass
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(timeout)
+    try:
+        p.kill()
+    except OSError:
+        pass
+    r = result.get("r")
+    if not r:
+        err = ""
+        try:
+            err = p.stderr.read(400).decode("utf-8", "ignore")
+        except OSError:
+            pass
+        return False, "الجسر لم يردّ خلال المهلة. " + err
+    if r.get("status") == 200:
+        return True, "الجسر يعمل ويتصل بسيل"
+    return False, f"الجسر ردّ بخطأ: {r}"

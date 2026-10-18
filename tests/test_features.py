@@ -289,3 +289,23 @@ def test_register_native_host(tmp_path):
     m = _j.load(open(d / "com.sayl.host.json"))
     assert m["name"] == "com.sayl.host" and m["type"] == "stdio" and os.path.isfile(m["path"])
     assert m["allowed_origins"] == [f"chrome-extension://{st.extension_id()}/"] and written
+
+
+def test_self_test_host_and_status(tmp_path, monkeypatch):
+    from sayl import setup_tools as st
+    cfg, mgr, _ = mk(tmp_path)
+    api = ApiServer(mgr, cfg)
+    api.start()
+    cfg["port"] = api.port
+    cfg.save()
+    monkeypatch.setenv("SAYL_CONFIG", cfg.path)
+    try:
+        ok, msg = st.self_test_host(timeout=20)
+        assert ok, msg
+    finally:
+        api.stop()
+        mgr.shutdown()
+    ok, msg = st.self_test_host(timeout=20)      # بعد إيقاف سيل: الجسر يردّ خطأً واضحًا لا يعلّق
+    assert not ok
+    st.register_native_host(extra_dirs=[str(tmp_path / "nm")], registry=False)
+    assert all(ok for _, ok in st.native_status())

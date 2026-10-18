@@ -41,7 +41,7 @@ function nativeConnect() {
   nport = chrome.runtime.connectNative(HOST);
   nport.onMessage.addListener((m) => {
     const p = nPending.get(m.id);
-    if (p) { nPending.delete(m.id); p.resolve(m); }
+    if (p) { nPending.delete(m.id); chrome.storage.local.remove("nativeError"); p.resolve(m); }
   });
   nport.onDisconnect.addListener(() => {
     const err = chrome.runtime.lastError?.message || "disconnected";
@@ -68,7 +68,8 @@ function nativeCall(path, options) {
       });
     } catch (e) { nPending.delete(id); clearTimeout(timer); reject(e); }
   }).catch((e) => {
-    nBadUntil = Date.now() + 60000;     // الجسر غير مسجّل أو معطّل: نستخدم HTTP دقيقة كاملة
+    nBadUntil = Date.now() + 15000;     // الجسر غير مسجّل أو معطّل: نستخدم HTTP لحظات ثم نعيد المحاولة
+    chrome.storage.local.set({ nativeError: String(e && e.message || e) });
     return null;
   });
 }
@@ -141,7 +142,7 @@ chrome.webRequest.onHeadersReceived.addListener((d) => {
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === "loading" && change.url) {       // تنقّل جديد: نصفّر القائمة
     chrome.storage.session.remove(key(tabId));
-    chrome.action.setBadgeText({ tabId, text: "" });
+    chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove(key(tabId)));

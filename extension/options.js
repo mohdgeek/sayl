@@ -4,7 +4,11 @@ async function showStatus() {
   const r = await chrome.runtime.sendMessage({ type: "ping" }).catch(() => null);
   const el = $("conn");
   if (r && r.ok) { el.textContent = "متصلة بسيل ✔"; el.style.color = "#4FD1A1"; }
-  else { el.textContent = "غير متصلة — شغّل سيل ثم أعد المحاولة"; el.style.color = "#FF6B6B"; }
+  else {
+    const { nativeError } = await chrome.storage.local.get("nativeError");
+    el.textContent = "غير متصلة — شغّل سيل ثم أعد المحاولة" + (nativeError ? ` (السبب: ${nativeError})` : "");
+    el.style.color = "#FF6B6B";
+  }
 }
 
 chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0 }).then((s) => {

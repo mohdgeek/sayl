@@ -599,21 +599,30 @@ class SettingsDialog(QDialog):
         btn_pair = QPushButton("إصلاح الاتصال")
         btn_pair.setObjectName("Primary")
         btn_pair.clicked.connect(self._pair_now)
+        btn_diag = QPushButton("فحص الاتصال")
+        btn_diag.setObjectName("Ghost")
+        btn_diag.clicked.connect(self._diagnose)
+        self.diag = QLabel("")
+        self.diag.setWordWrap(True)
+        self.diag.setTextInteractionFlags(Qt.TextSelectableByMouse)
         btn_folder = QPushButton("فتح مجلد الإضافة")
         btn_folder.setObjectName("Ghost")
         btn_folder.clicked.connect(self._open_ext_folder)
         r2 = QHBoxLayout()
         r2.addWidget(btn_folder)
+        r2.addWidget(btn_diag)
         r2.addStretch(1)
         r2.addWidget(btn_pair)
         lay.addSpacing(6)
         lay.addWidget(self.ext_state)
         lay.addWidget(self.ext_msg)
         lay.addLayout(r2)
+        lay.addWidget(self.diag)
         lay.addStretch(1)
         note = QLabel("متصفح Firefox غير مدعوم حاليًا.")
         note.setObjectName("Sub")
         lay.addWidget(note)
+        self._diag_done.connect(self._on_diag)
         self._ext_timer = QTimer(self)
         self._ext_timer.timeout.connect(self._refresh_ext_state)
         self._ext_timer.start(1500)
@@ -633,6 +642,30 @@ class SettingsDialog(QDialog):
                                    " — اضغط «إصلاح الاتصال».")
         else:
             self.ext_state.setText("<b>● لم تتصل أي إضافة بعد</b> — ثبّتها من الأعلى، وإن لم تتصل اضغط «إصلاح الاتصال».")
+
+    def _diagnose(self):
+        """يعرض حالة تسجيل الجسر ثم يختبر ملف الجسر مباشرة دون متصفح."""
+        ok_c, bad_c = theme.C["ok"], theme.C["err"]
+        lines = []
+        try:
+            setup_tools.register_native_host(self.config)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"<span style='color:{bad_c}'>✘ فشل التسجيل: {e}</span>")
+        for text, ok in setup_tools.native_status():
+            lines.append(f"<span style='color:{ok_c if ok else bad_c}'>{'✔' if ok else '✘'} {text}</span>")
+        self.diag.setText("<br>".join(lines) + "<br>جارٍ اختبار ملف الجسر…")
+        self._diag_lines = lines
+
+        def work():
+            self._diag_done.emit(*setup_tools.self_test_host())
+        threading.Thread(target=work, daemon=True).start()
+
+    _diag_done = Signal(bool, str)
+
+    def _on_diag(self, ok, msg):
+        c = theme.C["ok"] if ok else theme.C["err"]
+        self.diag.setText("<br>".join(self._diag_lines) +
+                          f"<br><span style='color:{c}'>{'✔' if ok else '✘'} {msg}</span>")
 
     def _pair_now(self):
         from .server import open_pairing

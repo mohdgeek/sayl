@@ -701,8 +701,8 @@ def main():
     app.setStyleSheet(theme.apply_config(config))
     try:
         setup_tools.register_native_host(config)      # يجعل الإضافة تعمل بلا رمز ولا منفذ
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        setup_tools.log(f"فشل تسجيل الجسر: {e!r}")
     manager = DownloadManager(config)
     bridge = Bridge()
     win = MainWindow(manager, config, bridge)
