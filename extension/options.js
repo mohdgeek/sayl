@@ -31,3 +31,23 @@ $("save").addEventListener("click", async () => {
     st.textContent = "البرنامج غير شغّال أو المنفذ خاطئ"; st.className = "bad";
   }
 });
+
+
+$("pair").addEventListener("click", async () => {
+  const st = $("status");
+  const port = parseInt($("port").value, 10) || 6800;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/pair`);
+    const p = await r.json();
+    if (r.ok && p.token) {
+      $("token").value = p.token;
+      $("port").value = p.port || port;
+      $("save").click();
+      return;
+    }
+    st.textContent = "اضغط أولًا «ربط الإضافة» في برنامج سيل (القائمة ⋮) ثم أعد المحاولة";
+  } catch (e) {
+    st.textContent = "البرنامج غير شغّال أو المنفذ خاطئ";
+  }
+  st.className = "bad";
+});

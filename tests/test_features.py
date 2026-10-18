@@ -195,3 +195,25 @@ def test_export_extension_pairs(tmp_path, monkeypatch):
     (fake / "extension" / "manifest.json").write_text("{}")
     monkeypatch.setattr(st.sys, "_MEIPASS", str(fake), raising=False)
     assert st.resource_path("extension") == str(fake / "extension")
+
+
+def test_pairing_window(tmp_path):
+    from sayl import server as sv
+    cfg, mgr, _ = mk(tmp_path)
+    api = ApiServer(mgr, cfg)
+    api.start()
+    base = f"http://127.0.0.1:{api.port}"
+    ext = {"Origin": "chrome-extension://abc"}
+    try:
+        sv._PAIR["until"] = 0
+        assert requests.get(base + "/pair", headers=ext).status_code == 403    # مغلق
+        sv.open_pairing(60)
+        assert requests.get(base + "/pair", headers={"Origin": "http://evil.com"}).status_code == 403
+        assert requests.get(base + "/pair").status_code == 403                  # بلا Origin
+        assert requests.get(base + "/pair", headers={**ext, "Host": "evil.com"}).status_code == 403
+        r = requests.get(base + "/pair", headers=ext)
+        assert r.status_code == 200 and r.json()["token"] == cfg["token"]
+    finally:
+        sv._PAIR["until"] = 0
+        api.stop()
+        mgr.shutdown()

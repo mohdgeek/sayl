@@ -17,9 +17,9 @@
   <h1>إعدادات سيل</h1>
   <div class="sub">اربط الإضافة بالبرنامج المثبّت على جهازك.</div>
   <div class="steps">
-    <b>1.</b> شغّل برنامج سيل.<br>
-    <b>2.</b> من إعدادات البرنامج انسخ «رمز الإضافة».<br>
-    <b>3.</b> الصقه هنا ثم اضغط حفظ.
+    <b>1.</b> شغّل برنامج سيل واضغط ⋮ ثم «ربط الإضافة».<br>
+    <b>2.</b> اضغط هنا الزر «ربط تلقائي» (خلال 5 دقائق).<br>
+    <b>3.</b> انتهى. لا حاجة لنسخ أي رمز.
   </div>
   <label class="field" for="token">رمز الإضافة</label>
   <input type="password" id="token" autocomplete="off" dir="ltr">
@@ -28,6 +28,7 @@
   <label class="field" for="minSizeMB">تجاهل الملفات الأصغر من (ميغابايت)</label>
   <input type="number" id="minSizeMB" value="0" min="0" dir="ltr">
   <label class="check"><input type="checkbox" id="enabled"> اعتراض تحميلات Chrome تلقائيًا</label>
+  <button class="btn" id="pair">ربط تلقائي</button>
   <button class="btn" id="save">حفظ واختبار الاتصال</button>
   <div id="status"></div>
   <script src="options.js"></script>

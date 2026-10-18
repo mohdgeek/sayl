@@ -17,12 +17,25 @@ async function syncPair() {
 syncPair();
 chrome.runtime.onStartup.addListener(syncPair);
 
-async function api(path, options = {}) {
+// ربط تلقائي: يعمل فقط بعد أن يضغط المستخدم «ربط الإضافة» في البرنامج (نافذة دقائق قليلة)
+async function pairFromApp(port) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/pair`);
+    if (!r.ok) return false;
+    const p = await r.json();
+    if (!p.token) return false;
+    await chrome.storage.local.set({ port: p.port || port, token: p.token });
+    return true;
+  } catch (e) { return false; }
+}
+
+async function api(path, options = {}, retried = false) {
   const { port, token } = await getSettings();
   const res = await fetch(`http://127.0.0.1:${port}${path}`, {
     ...options,
     headers: { "Content-Type": "application/json", "X-Sayl-Token": token, ...(options.headers || {}) },
   });
+  if (res.status === 401 && !retried && (await pairFromApp(port))) return api(path, options, true);
   if (!res.ok) throw new Error(res.status === 401 ? "الرمز غير صحيح" : `خطأ ${res.status}`);
   return res.json();
 }

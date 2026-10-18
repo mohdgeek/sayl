@@ -7,6 +7,7 @@ from .manager import DuplicateError
 import hmac
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .media import available as media_available
@@ -14,6 +15,14 @@ from .media import available as media_available
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 ALLOWED_HEADERS = {"cookie", "referer", "user-agent", "authorization", "origin"}
 MAX_BODY = 64 * 1024
+
+
+_PAIR = {"until": 0.0}
+
+
+def open_pairing(seconds=300):
+    """يفتح نافذة قصيرة تسمح لإضافة المتصفح (فقط) بجلب الرمز تلقائيًا بعد أن يطلب المستخدم ذلك."""
+    _PAIR["until"] = time.time() + seconds
 
 
 def make_handler(manager, config, on_add=None):
@@ -59,7 +68,18 @@ def make_handler(manager, config, on_add=None):
                 self.send_header("Access-Control-Allow-Methods", "GET, POST")
             self.end_headers()
 
+        def _pair(self):
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            origin = self.headers.get("Origin", "")
+            if host not in ALLOWED_HOSTS or not origin.startswith("chrome-extension://"):
+                return self._send(403, {"ok": False, "error": "origin"})
+            if time.time() > _PAIR["until"]:
+                return self._send(403, {"ok": False, "error": "pairing_closed"})
+            self._send(200, {"ok": True, "token": config["token"], "port": int(config["port"])})
+
         def do_GET(self):
+            if self.path == "/pair":
+                return self._pair()
             if self.path == "/ping" and self._check():
                 self._send(200, {"ok": True, "app": "Sayl", "media": media_available()})
             else:

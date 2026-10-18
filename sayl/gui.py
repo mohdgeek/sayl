@@ -18,7 +18,7 @@ from .dialogs import AddDialog, SettingsDialog, WelcomeDialog
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
 from .media import is_media_url
-from .server import ApiServer
+from .server import ApiServer, open_pairing
 from .widgets import (CAT_ICON, DownloadRow, ElidedLabel, FileTile, IconButton, NavButton,
                       SpeedGraph, fmt_size)
 
@@ -221,6 +221,7 @@ class MainWindow(QMainWindow):
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
         mm.addSeparator()
         mm.addAction("تثبيت إضافة Chrome…", self.show_welcome)
+        mm.addAction("ربط الإضافة (5 دقائق)", self.pair_extension)
         mm.addSeparator()
         after = mm.addMenu("بعد انتهاء الطابور")
         self._after_acts = {}
@@ -589,6 +590,11 @@ class MainWindow(QMainWindow):
                 self.manager.shutdown()
                 selfupdate.apply_and_restart(dlg.ready_path)
                 self.quit()
+
+    def pair_extension(self):
+        open_pairing(300)
+        self.show_banner("جاهز للربط: افتح خيارات إضافة سيل في Chrome واضغط «ربط تلقائي» (خلال 5 دقائق).",
+                         None, 20)
 
     def show_welcome(self):
         WelcomeDialog(self.config, self).exec()

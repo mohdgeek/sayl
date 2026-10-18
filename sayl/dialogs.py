@@ -858,6 +858,8 @@ class WelcomeDialog(QDialog):
         except Exception as e:  # noqa: BLE001
             self.msg.setText(f"تعذّر تجهيز الإضافة: {e}")
             return
+        from .server import open_pairing
+        open_pairing(600)
         QApplication.clipboard().setText("chrome://extensions")
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         self.msg.setText(
