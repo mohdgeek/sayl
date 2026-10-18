@@ -52,6 +52,118 @@ def js_runtime_opts():
     return opts
 
 
+def clean_subtitle_text(text):
+    """ترجمات يوتيوب التلقائية «متدحرجة»: كل مقطع يكرر السطر السابق ثم يضيف الجديد، فيظهر سطران مكدّسان.
+    نُبقي السطر الجديد فقط (حذف ما ظهر في المقطع السابق) فيظهر سطر واحد بترتيب صحيح."""
+    import re
+    blocks = re.split(r"\r?\n\r?\n+", text.strip("\ufeff\r\n") + "\n")
+    out, prev, n = [], [], 0
+    for b in blocks:
+        lines = b.splitlines()
+        ti = next((i for i, l in enumerate(lines) if "-->" in l), None)
+        if ti is None:
+            out.append(b)          # ترويسة WEBVTT وما شابه
+            continue
+        body = [re.sub(r"<[^>]+>", "", l).strip() for l in lines[ti + 1:]]
+        body = [l for l in body if l]
+        new = [l for l in body if l not in prev] or ([] if body == prev else body)
+        prev = body or prev
+        if not new:
+            continue
+        n += 1
+        head = [str(n)] if lines and lines[0].strip().isdigit() else []
+        out.append("\n".join(head + [lines[ti]] + new))
+    return "\n\n".join(out) + "\n"
+
+
+def clean_subtitles_for(folder, stem):
+    try:
+        names = [n for n in os.listdir(folder) if n.startswith(stem[:60]) and n.lower().endswith((".srt", ".vtt"))]
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(folder, n)
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                t = f.read()
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(clean_subtitle_text(t))
+        except (OSError, UnicodeError):
+            pass
+
+
+def aria2_path():
+    local = os.path.join(os.path.expanduser("~"), ".sayl", "bin", "aria2c.exe" if os.name == "nt" else "aria2c")
+    return local if os.path.isfile(local) else shutil.which("aria2c")
+
+
+_SIZE_UNITS = {"B": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3, "TiB": 1024 ** 4}
+
+
+def _aria_size(txt):
+    import re
+    mt = re.match(r"([\d.]+)([KMGT]?i?B)?$", txt)
+    if not mt:
+        return 0
+    return int(float(mt.group(1)) * _SIZE_UNITS.get(mt.group(2) or "B", 1))
+
+
+def parse_aria_readout(line):
+    """[#2089b0 400KiB/33MiB(1%) CN:16 DL:2.1MiB ETA:4m] -> (منزَّل، إجمالي، سرعة) أو None."""
+    import re
+    mt = re.search(r"\[#\w+ ([\d.]+\w*)/([\d.]+\w*)\(\d+%\).*?DL:([\d.]+\w*)", line)
+    if not mt:
+        return None
+    return _aria_size(mt.group(1)), _aria_size(mt.group(2)), _aria_size(mt.group(3))
+
+
+_ARIA_PATCHED = []
+
+
+def patch_aria2():
+    """يجعل yt-dlp ينقل تقدّم aria2c إلى واجهتنا (افتراضيًا لا يعرض aria2c أي تقدّم)."""
+    if _ARIA_PATCHED:
+        return _ARIA_PATCHED[0]
+    ok = False
+    try:
+        import subprocess
+        import yt_dlp.downloader.external as ext
+
+        class SaylAria2c(ext.Aria2cFD):
+            def _call_process(self, cmd, info_dict):
+                flags = 0x08000000 if os.name == "nt" else 0
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        creationflags=flags)
+                tail, buf = [], ""
+                try:
+                    while True:
+                        chunk = proc.stdout.read(128)
+                        if not chunk:
+                            break
+                        buf += chunk.decode("utf-8", "replace")
+                        parts = buf.replace("\r", "\n").split("\n")
+                        buf = parts.pop()
+                        for ln in parts:
+                            r = parse_aria_readout(ln)
+                            if r:
+                                self._hook_progress({"status": "downloading", "downloaded_bytes": r[0],
+                                                     "total_bytes": r[1], "speed": r[2]}, info_dict)
+                            elif ln.strip():
+                                tail.append(ln.strip())
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait()
+                return "", "\n".join(tail[-5:]), proc.returncode
+
+        ext._BY_NAME["aria2c"] = SaylAria2c
+        ok = True
+    except Exception:  # noqa: BLE001
+        ok = False
+    _ARIA_PATCHED.append(ok)
+    return ok
+
+
 _RETRY_ERR = ("reloaded", "sign in", "not available", "403", "player response", "po token",
               "challenge", "n function", "signature", "unable to extract")
 _CLIENTS = (None, ["android_vr"], ["tv"], ["mweb"])
@@ -196,6 +308,8 @@ class MediaDownload:
         self.created = time.time()
         self._streams = 1
         self._seen = {}            # format_id -> [بايتات منزَّلة, الإجمالي]
+        self._est = {}             # format_id -> الحجم التقديري من المعلومات
+        self._no_aria = False
         self._order = []
         self._frac = 0.0
         self._stop = threading.Event()
@@ -271,24 +385,25 @@ class MediaDownload:
         if self._stop.is_set():
             raise DownloadCancelled()
         fid = (d.get("info_dict") or {}).get("format_id", "0")
-        if fid not in self._order:
-            self._order.append(fid)
-        idx = self._order.index(fid)
         total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
         done = d.get("downloaded_bytes") or 0
-        self._seen[fid] = [done, total]
         if d.get("status") == "finished":
-            frac = 1.0
+            total = total or done
+            self._seen[fid] = [total, total]
             self.speed = 0.0
         else:
-            frac = (done / total) if total else 0.0
+            self._seen[fid] = [done, max(total, done)]
             self.speed = float(d.get("speed") or 0.0)
             self._eta = d.get("eta")
-        self._frac = (idx + frac) / max(self._streams, 1)
+        # الإجمالي = مجموع أحجام كل المسارات (المعروف فعليًا، وإلا التقديري)، فلا يقفز التقدّم ولا الحجم
+        ids = set(self._est) | set(self._seen)
+        tot = sum((self._seen.get(i) or [0, 0])[1] or self._est.get(i, 0) for i in ids)
+        got = sum(v[0] for v in self._seen.values())
+        if tot:
+            self.size = tot
+            self._frac = min(got / tot, 0.999)
         if self.state == PROBING:
             self.state = DOWNLOADING
-        if not self.size and self._seen:
-            self.size = sum(v[1] for v in self._seen.values()) or None
 
     def _out_dir(self):
         if not self.subfolder:
@@ -345,42 +460,46 @@ class MediaDownload:
         finally:
             self.speed = 0.0
 
+    def _make_opts(self, log, clients):
+        opts = self._build_opts(log)
+        opts.update(js_runtime_opts())
+        if clients:
+            opts["extractor_args"] = {"youtube": {"player_client": clients}}
+        ar = None if self._no_aria else aria2_path()
+        if ar and patch_aria2():
+            opts["external_downloader"] = {"http": ar, "https": ar}   # اتصالات متوازية: أسرع بكثير
+        return opts
+
     def _attempt_all(self, log):
         yt = "youtu" in self.url
         last = None
         try:
             from .setup_tools import log as _syslog
             _syslog(f"media: yt-dlp {getattr(yt_dlp.version, '__version__', '?')} "
-                f"js={list(js_runtime_opts().get('js_runtimes', {})) or 'none'} url={self.url[:80]}")
+                    f"js={list(js_runtime_opts().get('js_runtimes', {})) or 'none'} "
+                    f"aria2={'yes' if aria2_path() else 'no'} url={self.url[:80]}")
         except Exception:  # noqa: BLE001
             pass
-        for clients in (_CLIENTS if yt else (None,)):
-            opts = self._build_opts(log)
-            opts.update(js_runtime_opts())
-            if clients:
-                opts["extractor_args"] = {"youtube": {"player_client": clients}}
+        clients_list = list(_CLIENTS if yt else (None,))
+        i = 0
+        while i < len(clients_list):
+            clients = clients_list[i]
             try:
-                try:
-                    return self._attempt(opts)
-                except DownloadCancelled:
-                    raise
-                except Exception as e:  # noqa: BLE001
-                    if self.subs and "subtitle" in (log.last_error or str(e)).lower() and not self._stop.is_set():
-                        # فشل جلب الترجمة (مثل 429) لا يجب أن يُفشل الفيديو: أعد المحاولة بدونها
-                        self.subs = []
-                        log.last_error = ""
-                        opts = self._build_opts(log)
-                        opts.update(js_runtime_opts())
-                        if clients:
-                            opts["extractor_args"] = {"youtube": {"player_client": clients}}
-                        return self._attempt(opts)
-                    raise
+                return self._attempt(self._make_opts(log, clients))
             except DownloadCancelled:
                 raise
             except Exception as e:  # noqa: BLE001
                 last = e
                 text = (log.last_error or str(e)).lower()
-                if self._stop.is_set() or not any(t in text for t in _RETRY_ERR):
+                if self._stop.is_set():
+                    break
+                if self.subs and "subtitle" in text:
+                    self.subs = []              # فشل الترجمة (مثل 429) لا يُفشل الفيديو
+                elif not self._no_aria and "aria2" in text:
+                    self._no_aria = True        # تعذّر المحمّل المتوازي: ارجع إلى المحمّل العادي
+                elif any(t in text for t in _RETRY_ERR):
+                    i += 1
+                else:
                     break
                 log.last_error = ""
         ver = getattr(yt_dlp.version, "__version__", "?")
@@ -397,6 +516,8 @@ class MediaDownload:
                     raise RuntimeError("البث المباشر غير مدعوم")
                 self.title = info.get("title") or ""
                 self._streams = len(info.get("requested_formats") or [1])
+                self._est = {str(f.get("format_id", i)): (f.get("filesize") or f.get("filesize_approx") or 0)
+                             for i, f in enumerate(info.get("requested_formats") or [info])}
                 est = sum((f.get("filesize") or f.get("filesize_approx") or 0)
                           for f in (info.get("requested_formats") or [info]))
                 self.size = est or None
@@ -412,6 +533,8 @@ class MediaDownload:
                 self.filename = os.path.basename(path)
                 self.final_dir = os.path.dirname(path)
                 self.size = os.path.getsize(path)
+                if self.subs:
+                    clean_subtitles_for(self.final_dir, os.path.splitext(self.filename)[0])
             self.state = COMPLETED
 
 

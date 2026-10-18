@@ -96,10 +96,11 @@ def auto_update_bg(config):
     import time
 
     def work():
-        try:
-            ensure_js_runtime()
-        except Exception:  # noqa: BLE001
-            pass
+        for fn in (ensure_js_runtime, ensure_aria2):
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             if time.time() - config.data.get("ytdlp_checked", 0) < 86400:
                 return
@@ -137,3 +138,34 @@ def ensure_js_runtime():
     except Exception as e:  # noqa: BLE001
         from .setup_tools import log
         log(f"فشل تنزيل deno: {e!r}")
+
+
+def ensure_aria2():
+    """aria2c يحمّل بعدة اتصالات متوازية فيصل لأقصى سرعة الإنترنت (ويندوز، مرة واحدة، حجمه ~2MB)."""
+    import shutil
+    import zipfile
+    if os.name != "nt":
+        return
+    d = os.path.join(APP_DIR, "bin")
+    exe = os.path.join(d, "aria2c.exe")
+    if os.path.isfile(exe) or shutil.which("aria2c"):
+        return
+    try:
+        os.makedirs(d, exist_ok=True)
+        url = ("https://github.com/aria2/aria2/releases/download/release-1.37.0/"
+               "aria2-1.37.0-win-64bit-build1.zip")
+        zp = os.path.join(d, "aria2.zip.part")
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Sayl"}), timeout=60) as r, \
+                open(zp, "wb") as out:
+            shutil.copyfileobj(r, out)
+        with zipfile.ZipFile(zp) as z:
+            name = next(n for n in z.namelist() if n.endswith("aria2c.exe"))
+            with z.open(name) as src, open(exe + ".part", "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        os.replace(exe + ".part", exe)
+        os.remove(zp)
+        from .setup_tools import log
+        log("تم تنزيل aria2c للتحميل المتوازي")
+    except Exception as e:  # noqa: BLE001
+        from .setup_tools import log
+        log(f"فشل تنزيل aria2c: {e!r}")

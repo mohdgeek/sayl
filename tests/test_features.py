@@ -405,3 +405,24 @@ def test_probe_and_confirm_api(tmp_path, monkeypatch):
     finally:
         api.stop()
         mgr.shutdown()
+
+
+def test_clean_rolling_subtitles():
+    src = ("1\n00:00:01,000 --> 00:00:02,000\nمرحبا بكم\n\n"
+           "2\n00:00:02,000 --> 00:00:03,000\nمرحبا بكم\nفي الدرس\n\n"
+           "3\n00:00:03,000 --> 00:00:04,000\nفي الدرس\nالأول\n")
+    out = media.clean_subtitle_text(src)
+    assert out.count("مرحبا بكم") == 1 and "في الدرس" in out and "الأول" in out
+    cues = [b for b in out.strip().split("\n\n")]
+    assert [c.splitlines()[-1] for c in cues] == ["مرحبا بكم", "في الدرس", "الأول"]
+    assert all(len(c.splitlines()) == 3 for c in cues)
+
+
+def test_media_progress_total_is_stable(tmp_path):
+    d = media.MediaDownload("https://x.test/v", str(tmp_path))
+    d._est = {"v": 600_000_000, "a": 20_000_000}
+    d._hook({"info_dict": {"format_id": "a"}, "downloaded_bytes": 10_000_000, "total_bytes": 20_000_000})
+    assert d.size == 620_000_000 and abs(d.progress - 10 / 620) < 1e-6
+    d._hook({"info_dict": {"format_id": "a"}, "status": "finished", "downloaded_bytes": 20_000_000})
+    d._hook({"info_dict": {"format_id": "v"}, "downloaded_bytes": 300_000_000, "total_bytes": 590_000_000})
+    assert d.downloaded == 320_000_000 and d.size == 610_000_000
