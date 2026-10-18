@@ -44,7 +44,7 @@ DEFAULTS = {
     "peak_stop": "17:00",
     "peak_kb": 500,
     "after_all": "none",
-    "update_repo": "",          # مثل: username/sayl
+    "update_repo": "mohdgeek/sayl",
     "auto_update_check": True,       # none | quit | shutdown
 }
 
