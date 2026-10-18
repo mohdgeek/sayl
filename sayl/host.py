@@ -90,7 +90,8 @@ def handle(msg, cfg=None, launch=True, wait=20.0):
         return {"id": msg.get("id"), **_call(cfg, msg)}
     except (urllib.error.URLError, OSError):
         pass
-    if launch and _launch_app(cfg):
+    # لا نشغّل سيل إلا عند طلب تحميل فعلي (/add). نبضات الفحص الدورية لا تُعيد فتح برنامج أغلقه المستخدم.
+    if launch and msg.get("path") == "/add" and _launch_app(cfg):
         end = time.time() + wait
         while time.time() < end:
             time.sleep(1)

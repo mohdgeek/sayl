@@ -355,3 +355,14 @@ def test_port_fallback_when_busy(tmp_path):
     srv2, moved2 = start_server(mgr, cfg)
     assert not moved2
     srv2.stop()
+
+
+def test_host_does_not_relaunch_on_ping(monkeypatch):
+    from sayl import host
+    calls = []
+    monkeypatch.setattr(host, "_launch_app", lambda cfg: calls.append(1) or False)
+    cfg = {"port": 1, "token": "x"}
+    assert host.handle({"id": 1, "path": "/ping"}, cfg)["error"] == "app_not_running"
+    assert calls == []                      # فحص دوري: لا إعادة تشغيل
+    assert host.handle({"id": 2, "path": "/add", "method": "POST", "body": {}}, cfg)["error"] == "app_not_running"
+    assert calls == [1]                     # تحميل فعلي: يحاول تشغيل سيل
