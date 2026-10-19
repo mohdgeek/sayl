@@ -718,7 +718,7 @@ def main():
         return
     try:
         from . import fonts
-        setup_tools.log("الخط: " + (", ".join(fonts.apply()) or "ثمانية غير مثبّت (الخط الافتراضي)"))
+        setup_tools.log("الخط: " + (", ".join(fonts.apply(config)) or "ثمانية غير مثبّت (الخط الافتراضي)"))
     except Exception as e:  # noqa: BLE001
         setup_tools.log(f"تعذّر تحميل الخط: {e!r}")
     app.setStyleSheet(theme.apply_config(config))

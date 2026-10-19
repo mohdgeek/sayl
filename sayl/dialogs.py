@@ -1082,9 +1082,13 @@ class SettingsDialog(QDialog):
         b1.setObjectName("Ghost")
         b1.clicked.connect(lambda: (os.makedirs(fonts.FONT_DIR, exist_ok=True),
                                     QDesktopServices.openUrl(QUrl.fromLocalFile(fonts.FONT_DIR))))
+        b3 = QPushButton("اختيار مجلد الخط…")
+        b3.setObjectName("Ghost")
+        b3.clicked.connect(lambda: self._pick_font_dir(fl))
         b2 = QPushButton("صفحة الخط الرسمية")
         b2.setObjectName("Ghost")
         b2.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(fonts.OFFICIAL_PAGE)))
+        frow.addWidget(b3)
         frow.addWidget(b1)
         frow.addWidget(b2)
         frow.addStretch(1)
@@ -1097,6 +1101,14 @@ class SettingsDialog(QDialog):
         lay.addWidget(reset, 0, Qt.AlignRight)
         lay.addStretch(1)
         return box
+
+    def _pick_font_dir(self, label):
+        d = QFileDialog.getExistingDirectory(self, "اختر المجلد الذي فيه ملفات otf أو ttf للخط",
+                                             self.config["font_dir"] or os.path.expanduser("~"))
+        if d:
+            self.config["font_dir"] = d
+            self.config.save()
+            label.setText("تم حفظ المجلد. أعد تشغيل سيل ليُطبَّق الخط.")
 
     def _cap(self, text):
         l = QLabel(text)

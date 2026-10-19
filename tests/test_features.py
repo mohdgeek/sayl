@@ -574,3 +574,16 @@ def test_stalled_segments_fall_back_to_single_stream(tmp_path):
     assert d.state == "completed", d.error
     assert time.monotonic() - t0 < 4.5          # لم ننتظر الخيوط العالقة (6ث)
     assert (tmp_path / "s.bin").read_bytes() == body
+
+
+def test_font_discovery_finds_thmanyah_files(tmp_path, monkeypatch):
+    from sayl import fonts
+    dl = tmp_path / "Downloads" / "Thmanyah-Font-Family" / "thmanyah typeface" / "thmanyahsans" / "otf"
+    dl.mkdir(parents=True)
+    (dl / "thmanyahsans-Regular.otf").write_bytes(b"x")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(fonts, "FONT_DIR", str(tmp_path / "nofonts"))
+    assert str(dl) in fonts._auto_dirs()
+    cfg = {"font_dir": ""}
+    assert str(dl) in fonts.font_dirs(cfg)

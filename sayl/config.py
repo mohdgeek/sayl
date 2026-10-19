@@ -46,6 +46,7 @@ DEFAULTS = {
     "after_all": "none",
     "update_repo": "mohdgeek/sayl",
     "auto_update_check": True,
+    "font_dir": "",             # مجلد يحوي ملفات خط ثمانية (otf/ttf)
     "category_dirs": {},        # مجلد محفوظ لكل فئة (من نافذة تأكيد التحميل)
     "welcomed": False,
     "app_exe": "",              # مسار البرنامج المُغلَّف، ليشغّله الجسر إن كان مغلقًا       # none | quit | shutdown
