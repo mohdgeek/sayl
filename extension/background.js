@@ -144,10 +144,11 @@ function addDetected(tabId, entry) {
 
 chrome.webRequest.onHeadersReceived.addListener((d) => {
   if (d.tabId < 0 || d.statusCode >= 400) return;
-  const info = SaylLib.classify(d.url, d.responseHeaders);
+  const info = SaylLib.classify(d.url, d.responseHeaders) ||
+    SaylLib.classifyDownload(d.url, d.responseHeaders);     // أي ملف (مضغوط، برنامج، مستند…)
   if (!info) return;
   addDetected(d.tabId, { url: d.url, kind: info.kind, type: info.type, size: info.size, ts: Date.now() });
-}, { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "other"] }, ["responseHeaders"]);
+}, { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "other", "main_frame", "sub_frame"] }, ["responseHeaders"]);
 
 function markPage(tabId, url) {
   if (!SaylLib.pageVideo(url)) return;

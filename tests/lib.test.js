@@ -22,3 +22,21 @@ assert.strictEqual(L.pageVideo('https://www.youtube.com/'), null);
 assert.strictEqual(L.pageVideo('https://vimeo.com/12345'), 'Vimeo');
 assert.strictEqual(L.pageVideo('https://example.com/watch?v=1'), null);
 console.log('lib tests passed');
+
+// ---- ملفات عادية من أي صيغة
+{
+  const assert = require("assert");
+  const L = require("../extension/lib.js");
+  const h = (o) => Object.entries(o).map(([name, value]) => ({ name, value }));
+  let r = L.classifyDownload("https://x.click/get?id=5", h({ "content-type": "application/zip", "content-length": "5000000" }));
+  assert(r && r.kind === "file");
+  r = L.classifyDownload("https://x.click/dl", h({ "content-type": "application/octet-stream", "content-disposition": 'attachment; filename="a.7z"' }));
+  assert(r && r.type === "7Z");
+  r = L.classifyDownload("https://x.click/a.rar", h({ "content-type": "text/html" }));
+  assert.strictEqual(r, null);                                   // صفحة HTML عادية
+  assert.strictEqual(L.classifyDownload("https://x.click/", h({ "content-type": "text/html; charset=utf-8" })), null);
+  assert.strictEqual(L.classifyDownload("https://x.click/api", h({ "content-type": "application/json" })), null);
+  r = L.classifyDownload("https://x.click/f.iso", h({ "content-type": "application/x-iso9660-image" }));
+  assert(r);
+  console.log("download classify tests passed");
+}

@@ -50,6 +50,31 @@ const SaylLib = (() => {
     return null;
   }
 
+  // ملفات عادية تُنزَّل (مضغوطة، برامج، مستندات، أقراص…) من أي صيغة: تعتمد على الترويسات لا الامتداد وحده
+  const ARCHIVE = /\.(zip|rar|7z|tar|gz|tgz|bz2|xz|zst|iso|img|dmg|exe|msi|apk|deb|rpm|pkg|jar|bin|cab|pdf|docx?|xlsx?|pptx?|torrent|csv|epub|apks|xapk|appx)(\?|#|$)/i;
+  const RENDERABLE = /^(text\/|image\/|video\/|audio\/|application\/(json|javascript|xml|xhtml\+xml|x-javascript|ld\+json|manifest\+json|wasm)|font\/)/;
+
+  function classifyDownload(url, headers) {
+    if (!/^https?:/i.test(url)) return null;
+    const host = hostOf(url);
+    if (!host || host === "127.0.0.1" || host === "localhost") return null;
+    const ctype = header(headers, "content-type").toLowerCase().split(";")[0].trim();
+    const disp = header(headers, "content-disposition");
+    const attach = /attachment/i.test(disp) || /filename\*?=/i.test(disp);
+    const binary = ctype === "application/octet-stream" || ctype === "binary/octet-stream" ||
+      (ctype.startsWith("application/") && !RENDERABLE.test(ctype) && ctype !== "application/pdf");
+    const byExt = ARCHIVE.test(url.split("?")[0]) || ARCHIVE.test(url);
+    if (!(attach || binary || (byExt && !ctype.startsWith("text/")))) return null;
+    const size = sizeOf(headers);
+    if (size !== null && size < MIN_SIZE) return null;
+    let label = "";
+    const fn = disp.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i);
+    if (fn) { const e = fn[1].match(/\.([A-Za-z0-9]{1,6})$/); if (e) label = e[1]; }
+    if (!label) { const e = url.split("?")[0].match(/\.([A-Za-z0-9]{1,6})$/); if (e) label = e[1]; }
+    if (!label) label = (ctype.split("/")[1] || "FILE").replace(/^x-/, "");
+    return { kind: "file", type: label.toUpperCase().slice(0, 8), size };
+  }
+
   function dedupeKey(url, kind) {
     try {
       const u = new URL(url);
@@ -94,6 +119,6 @@ const SaylLib = (() => {
     return re && re.test(p) ? h.split(".")[0].replace(/^./, (c) => c.toUpperCase()) : null;
   }
 
-  return { classify, dedupeKey, fmtSize, pickBest, hostOf, pageVideo };
+  return { classify, classifyDownload, dedupeKey, fmtSize, pickBest, hostOf, pageVideo };
 })();
 if (typeof module !== "undefined") module.exports = SaylLib;

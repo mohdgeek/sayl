@@ -17,9 +17,9 @@ COLORS = {k: c for k, _, c in CATEGORIES}
 _EXT = {
     "video": "mp4 mkv avi mov webm flv wmv m4v mpg mpeg 3gp ts m3u8 mpd",
     "audio": "mp3 m4a aac flac wav ogg opus wma aiff",
-    "docs": "pdf doc docx xls xlsx ppt pptx txt rtf odt epub csv md",
-    "archive": "zip rar 7z tar gz bz2 xz tgz zst",
-    "apps": "exe msi apk dmg deb rpm appimage pkg iso bat",
+    "docs": "pdf doc docx xls xlsx ppt pptx txt rtf odt ods odp epub mobi csv md torrent",
+    "archive": "zip rar 7z tar gz bz2 xz tgz zst cab lz lzma z arj",
+    "apps": "exe msi apk apks xapk dmg deb rpm appimage pkg iso img bin bat jar appx msix",
     "images": "jpg jpeg png gif webp bmp svg ico tiff heic",
 }
 EXT_TO_CAT = {e: k for k, exts in _EXT.items() for e in exts.split()}
