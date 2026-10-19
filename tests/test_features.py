@@ -532,3 +532,43 @@ def test_pause_is_instant_even_when_server_stalls(tmp_path):
     d.cancel(delete_files=True)
     assert time.monotonic() - t0 < 1.0
     srv.shutdown()
+
+
+def test_stalled_segments_fall_back_to_single_stream(tmp_path):
+    import http.server, threading
+    from sayl.engine import Download, RateLimiter
+    body = os.urandom(3 * 1024 * 1024)
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            rng = self.headers.get("Range")
+            if rng == "bytes=0-0":
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes 0-0/{len(body)}")
+                self.send_header("Content-Length", "1")
+                self.end_headers()
+                self.wfile.write(b"x")
+                return
+            if rng:
+                time.sleep(6)                               # الاتصالات المجزّأة تعلق
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    d = Download(f"http://127.0.0.1:{srv.server_address[1]}/s.bin", str(tmp_path), connections=4,
+                 limiter=RateLimiter(0))
+    d.STALL_SECS = 1
+    d.start()
+    for _ in range(150):
+        if d.state in ("completed", "error"):
+            break
+        time.sleep(0.1)
+    srv.shutdown()
+    assert d.state == "completed", d.error
+    assert (tmp_path / "s.bin").read_bytes() == body

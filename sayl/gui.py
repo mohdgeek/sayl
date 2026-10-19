@@ -695,6 +695,8 @@ class MainWindow(QMainWindow):
 
 def main():
     setup_tools.install_excepthook()
+    from . import __version__ as _v
+    setup_tools.log(f"سيل {_v} بدأ")
     app = QApplication(sys.argv)
     app.setLayoutDirection(Qt.RightToLeft)
     app.setQuitOnLastWindowClosed(False)

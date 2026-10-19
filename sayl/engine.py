@@ -182,6 +182,7 @@ class Download:
 
     # ------------------------------------------------------------ التحكم
     last_issue = ""
+    STALL_SECS = 25
 
     def start(self):
         if self.active:
@@ -269,6 +270,13 @@ class Download:
                 return
             self._tmp = os.path.join(self.dest_dir, self.filename + META_EXT)
             self.state = DOWNLOADING
+            try:
+                from urllib.parse import urlparse
+                from .setup_tools import log
+                log(f"engine: بدء {self.filename} من {urlparse(self.url).hostname} "
+                    f"حجم={self.size} يدعم الاستئناف={self.resumable} اتصالات={self.connections}")
+            except Exception:  # noqa: BLE001
+                pass
             if self.resumable and self.size:
                 self._run_segmented()
             else:
@@ -396,9 +404,16 @@ class Download:
                 t.start()
                 threads.append(t)
         last_bytes, last_t, last_save = self.downloaded, time.monotonic(), 0.0
+        began, base = last_t, self.downloaded
+        self._auto_stop = False
         while any(t.is_alive() for t in threads):
             time.sleep(0.25)
             now = time.monotonic()
+            if (not self._auto_stop and not self._stop.is_set() and self.downloaded == base
+                    and now - began > self.STALL_SECS):
+                # لم يصل أي بايت: غالبًا الخادم يرفض الاتصالات المتعددة أو بطء التخصيص؛ نجرّب اتصالًا واحدًا
+                self._auto_stop = True
+                self._stop.set()
             cur = self.downloaded
             inst = (cur - last_bytes) / max(now - last_t, 1e-6)
             self.speed = inst if self.speed == 0 else 0.6 * self.speed + 0.4 * inst
@@ -408,6 +423,21 @@ class Download:
                 last_save = now
         for t in threads:
             t.join()
+        if self._auto_stop:
+            self._auto_stop = False
+            self._stop.clear()
+            self.segments, self.resumable = [], False
+            for ext in ("", ".json"):
+                try:
+                    os.remove(self._tmp + ext)
+                except OSError:
+                    pass
+            try:
+                from .setup_tools import log
+                log(f"engine: لا بايتات خلال {self.STALL_SECS}ث ({self.filename}) -> اتصال واحد")
+            except Exception:  # noqa: BLE001
+                pass
+            return self._run_single()
         self._save_meta()
         if errors:
             self._stop.clear()
