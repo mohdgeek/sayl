@@ -204,7 +204,7 @@ def patch_aria2():
 
 _RETRY_ERR = ("reloaded", "sign in", "not available", "403", "player response", "po token",
               "challenge", "n function", "signature", "unable to extract")
-_CLIENTS = (None, ["android_vr"], ["tv"], ["mweb"])
+_CLIENTS = (None, ["android_vr"], ["tv"], ["mweb"], ["web_safari"], ["tv_simply"], ["web_embedded"], ["ios"])
 
 
 def available():
@@ -592,6 +592,12 @@ class MediaDownload:
             except Exception as e:  # noqa: BLE001
                 last = e
                 text = (log.last_error or str(e)).lower()
+                try:
+                    from .setup_tools import log as _syslog
+                    _syslog(f"media: فشلت المحاولة (clients={clients}, aria2={'لا' if self._no_aria else 'نعم'}): "
+                            f"{text[:220]}")
+                except Exception:  # noqa: BLE001
+                    pass
                 if self._stop.is_set():
                     break
                 if self.subs and "subtitle" in text:

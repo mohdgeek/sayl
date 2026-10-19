@@ -62,10 +62,48 @@ def _fmt_size(n):
         n /= 1024
 
 
-class ProgressWindow(QDialog):
-    """نافذة تقدّم التحميل (مثل IDM): تبقى ظاهرة أثناء التحميل. إغلاقها لا يوقف التحميل."""
+class _SpeedGraph(QWidget):
+    """رسم بياني صغير لسرعة التحميل خلال الدقائق الأخيرة."""
 
-    def __init__(self, manager, d, parent=None):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from collections import deque
+        self.samples = deque([0.0] * 90, maxlen=90)
+        self.setMinimumHeight(64)
+
+    def push(self, v):
+        self.samples.append(float(v))
+        self.update()
+
+    def paintEvent(self, _e):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QPainter, QPainterPath, QPen
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        top = max(max(self.samples), 1.0) * 1.15
+        pts = [QPointF(i * w / (len(self.samples) - 1), h - 3 - (v / top) * (h - 8))
+               for i, v in enumerate(self.samples)]
+        col = QColor(theme.C["accent"])
+        path = QPainterPath(QPointF(0, h))
+        for pt in pts:
+            path.lineTo(pt)
+        path.lineTo(QPointF(w, h))
+        fill = QColor(col)
+        fill.setAlpha(46)
+        p.fillPath(path, fill)
+        line = QPainterPath(pts[0])
+        for pt in pts[1:]:
+            line.lineTo(pt)
+        p.setPen(QPen(col, 2))
+        p.drawPath(line)
+
+
+class ProgressWindow(QDialog):
+    """نافذة تقدّم التحميل (مثل IDM لكن بتصميم حديث): معلومات كاملة وإعدادات سريعة.
+    إغلاقها لا يوقف التحميل."""
+
+    def __init__(self, manager, d, parent=None, config=None, on_open_main=None, on_after=None):
         super().__init__(parent)
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QProgressBar
@@ -73,53 +111,181 @@ class ProgressWindow(QDialog):
         self._S = dict(COMPLETED=COMPLETED, DOWNLOADING=DOWNLOADING, ERROR=ERROR, PAUSED=PAUSED,
                        PROBING=PROBING, QUEUED=QUEUED)
         self.manager, self.d = manager, d
-        self.setWindowTitle("تحميل")
-        self.setMinimumWidth(520)
-        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.config = config or manager.config
+        self.on_open_main = on_open_main
+        self.on_after = on_after
+        self.setWindowTitle("سيل — تحميل")
+        self.setMinimumWidth(600)
+        is_http = getattr(d, "kind", "http") == "http"
 
+        # ---- الرأس: شارة الفئة + الاسم + الشرائح
+        from .categories import category_of
+        cat = category_of(d.filename or "", getattr(d, "kind", "http"))
+        self.badge = QLabel(LABELS.get(cat, ""))
+        self.badge.setAlignment(Qt.AlignCenter)
+        self.badge.setFixedSize(58, 58)
+        self.badge.setStyleSheet(f"background:{COLORS.get(cat, '#8A91A8')}; color:#101010; "
+                                 "border-radius:16px; font-weight:700;")
         self.name = QLabel(d.filename or d.url)
         self.name.setObjectName("RowName")
+        self.name.setStyleSheet("font-size:16px; font-weight:700;")
         self.name.setLayoutDirection(Qt.LeftToRight)
         self.name.setWordWrap(True)
-        self.state = QLabel("")
-        self.state.setObjectName("Sub")
+        try:
+            host = urllib.parse.urlparse(d.url).hostname or ""
+        except ValueError:
+            host = ""
+        self.chip_state = QLabel("")
+        self.chip_state.setObjectName("Chip")
+        self.chip_host = QLabel(host)
+        self.chip_host.setObjectName("Chip")
+        self.chip_host.setLayoutDirection(Qt.LeftToRight)
+        chips = QHBoxLayout()
+        chips.addWidget(self.chip_state)
+        chips.addWidget(self.chip_host)
+        chips.addStretch(1)
+        head_txt = QVBoxLayout()
+        head_txt.addWidget(self.name)
+        head_txt.addLayout(chips)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        head.addWidget(self.badge)
+        head.addLayout(head_txt, 1)
+
+        # ---- التقدّم
+        self.pct = QLabel("0%")
+        self.pct.setStyleSheet("font-size:30px; font-weight:800;")
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(10)
-        self.stats = QLabel("")
-        self.stats.setObjectName("Meta")
-        self.stats.setWordWrap(True)
+        self.bar.setFixedHeight(12)
+        self.bar.setStyleSheet(
+            f"QProgressBar {{ background: {theme.C['track']}; border: none; border-radius: 6px; }}"
+            f"QProgressBar::chunk {{ background: {theme.C['accent']}; border-radius: 6px; }}")
+        prog = QHBoxLayout()
+        prog.setSpacing(14)
+        prog.addWidget(self.pct)
+        prog.addWidget(self.bar, 1)
 
+        # ---- بطاقات المعلومات
+        self.stat = {}
+        grid = QHBoxLayout()
+        grid.setSpacing(10)
+        for key, cap in (("size", "الحجم"), ("done", "تم تحميله"), ("speed", "السرعة"),
+                         ("eta", "المتبقي"), ("conn", "الاتصالات")):
+            card = QFrame()
+            card.setObjectName("Card")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 9, 12, 9)
+            cl.setSpacing(2)
+            c = QLabel(cap)
+            c.setObjectName("Sub")
+            v = QLabel("—")
+            v.setStyleSheet("font-size:15px; font-weight:700;")
+            v.setLayoutDirection(Qt.LeftToRight)
+            v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            cl.addWidget(c)
+            cl.addWidget(v)
+            grid.addWidget(card, 1)
+            self.stat[key] = v
+
+        self.graph = _SpeedGraph()
+
+        # ---- التفاصيل والإعدادات
+        box = QFrame()
+        box.setObjectName("Card")
+        form = QFormLayout(box)
+        form.setContentsMargins(14, 12, 14, 12)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignRight)
+        self.path_lbl = QLineEdit(d.folder or "")
+        self.path_lbl.setReadOnly(True)
+        self.path_lbl.setLayoutDirection(Qt.LeftToRight)
+        self.url_lbl = QLineEdit(d.url)
+        self.url_lbl.setReadOnly(True)
+        self.url_lbl.setLayoutDirection(Qt.LeftToRight)
+        self.url_lbl.setCursorPosition(0)
+        copy = QPushButton("نسخ")
+        copy.setObjectName("Ghost")
+        copy.setStyleSheet("padding: 6px 14px;")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(d.url))
+        urow = QHBoxLayout()
+        urow.addWidget(self.url_lbl, 1)
+        urow.addWidget(copy)
+        form.addRow("الحفظ في", self.path_lbl)
+        form.addRow("الرابط", urow)
+
+        self.spin_conn = QSpinBox()
+        self.spin_conn.setRange(1, 32)
+        self.spin_conn.setValue(int(getattr(d, "connections", 8) or 8))
+        self.btn_conn = QPushButton("تطبيق")
+        self.btn_conn.setObjectName("Ghost")
+        self.btn_conn.setStyleSheet("padding: 6px 14px;")
+        self.btn_conn.clicked.connect(self._apply_conn)
+        crow = QHBoxLayout()
+        crow.addWidget(self.spin_conn)
+        crow.addWidget(self.btn_conn)
+        crow.addStretch(1)
+        if is_http:
+            form.addRow("عدد الاتصالات", crow)
+
+        self.spin_limit = QSpinBox()
+        self.spin_limit.setRange(0, 10_000_000)
+        self.spin_limit.setSingleStep(100)
+        self.spin_limit.setSuffix(" KB/s")
+        self.spin_limit.setSpecialValueText("بلا حد")
+        self.spin_limit.setValue(int(self.config["speed_limit_kb"] or 0))
+        self.spin_limit.valueChanged.connect(self._apply_limit)
+        form.addRow("حد السرعة (لكل التحميلات)", self.spin_limit)
+
+        self.after = QComboBox()
+        for k, t in (("none", "لا شيء"), ("quit", "إغلاق سيل"), ("shutdown", "إطفاء الجهاز")):
+            self.after.addItem(t, k)
+        self.after.setCurrentIndex(max(0, self.after.findData(self.config["after_all"])))
+        self.after.currentIndexChanged.connect(self._apply_after)
+        form.addRow("بعد انتهاء كل التحميلات", self.after)
+
+        # ---- الأزرار
         self.b_pause = QPushButton("إيقاف مؤقت")
         self.b_pause.setObjectName("Ghost")
         self.b_open = QPushButton("فتح الملف")
-        self.b_open.setObjectName("Ghost")
+        self.b_open.setObjectName("Primary")
         self.b_folder = QPushButton("فتح المجلد")
         self.b_folder.setObjectName("Ghost")
         self.b_cancel = QPushButton("إلغاء التحميل")
         self.b_cancel.setObjectName("Ghost")
+        self.b_main = QPushButton("فتح سيل")
+        self.b_main.setObjectName("Ghost")
         self.b_hide = QPushButton("إغلاق النافذة")
-        self.b_hide.setObjectName("Primary")
+        self.b_hide.setObjectName("Ghost")
         self.b_pause.clicked.connect(self._toggle)
         self.b_open.clicked.connect(lambda: self._open(True))
         self.b_folder.clicked.connect(lambda: self._open(False))
         self.b_cancel.clicked.connect(self._cancel)
+        self.b_main.clicked.connect(lambda: self.on_open_main and self.on_open_main())
+        self.b_main.setVisible(bool(on_open_main))
         self.b_hide.clicked.connect(self.close)
         btns = QHBoxLayout()
         for b in (self.b_pause, self.b_open, self.b_folder, self.b_cancel):
             btns.addWidget(b)
         btns.addStretch(1)
+        btns.addWidget(self.b_main)
         btns.addWidget(self.b_hide)
 
+        self.err = QLabel("")
+        self.err.setObjectName("MetaErr")
+        self.err.setWordWrap(True)
+        self.err.setVisible(False)
+
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 20, 22, 18)
-        lay.setSpacing(10)
-        lay.addWidget(self.name)
-        lay.addWidget(self.state)
-        lay.addWidget(self.bar)
-        lay.addWidget(self.stats)
-        lay.addSpacing(6)
+        lay.setContentsMargins(24, 22, 24, 20)
+        lay.setSpacing(14)
+        lay.addLayout(head)
+        lay.addLayout(prog)
+        lay.addLayout(grid)
+        lay.addWidget(self.graph)
+        lay.addWidget(self.err)
+        lay.addWidget(box)
         lay.addLayout(btns)
 
         self._timer = QTimer(self)
@@ -127,32 +293,42 @@ class ProgressWindow(QDialog):
         self._timer.start(400)
         self.refresh()
 
+    def _chip(self, text, kind=""):
+        self.chip_state.setText(text)
+        self.chip_state.setProperty("kind", kind)
+        self.chip_state.style().unpolish(self.chip_state)
+        self.chip_state.style().polish(self.chip_state)
+
     def refresh(self):
-        from .widgets import fmt_eta, fmt_size, fmt_speed, ltr
+        from .widgets import fmt_eta, fmt_size, fmt_speed
         d, S = self.d, self._S
         if d.filename:
             self.name.setText(d.filename)
+        self.path_lbl.setText(d.folder or "")
         self.bar.setValue(int(d.progress * 1000))
+        self.pct.setText(f"{d.progress * 100:.1f}%")
         st = d.state
-        text = {S["COMPLETED"]: "اكتمل التحميل", S["PAUSED"]: "متوقف مؤقتًا", S["ERROR"]: "فشل التحميل",
-                S["PROBING"]: "جارٍ الاتصال…", S["QUEUED"]: "في الانتظار"}.get(st, "جارٍ التحميل")
+        label, kind = {S["COMPLETED"]: ("مكتمل", "ok"), S["PAUSED"]: ("متوقف مؤقتًا", ""),
+                       S["ERROR"]: ("فشل", "err"), S["PROBING"]: ("جارٍ الاتصال…", ""),
+                       S["QUEUED"]: ("في الانتظار", "")}.get(st, ("جارٍ التحميل", "run"))
+        self._chip(label, kind)
+        running = st == S["DOWNLOADING"]
+        self.stat["size"].setText(fmt_size(d.size) if d.size else "—")
+        self.stat["done"].setText(fmt_size(d.downloaded))
+        self.stat["speed"].setText(fmt_speed(d.speed) if running and d.speed > 1 else "—")
+        self.stat["eta"].setText(fmt_eta(d.eta) if running and d.eta else "—")
+        segs = getattr(d, "segments", None)
+        self.stat["conn"].setText(str(sum(1 for s in segs if s.pos < s.end)) if (segs and running) else "—")
+        self.graph.push(d.speed if running else 0)
         if st == S["ERROR"] and d.error:
-            text += ": " + d.error
-        self.state.setText(text)
-        parts = [f"{d.progress * 100:.1f}%"]
-        if d.size:
-            parts.append(f"{ltr(fmt_size(d.downloaded))} من {ltr(fmt_size(d.size))}")
-        elif d.downloaded:
-            parts.append(ltr(fmt_size(d.downloaded)))
-        if st == S["DOWNLOADING"] and d.speed > 1:
-            parts.append("السرعة " + ltr(fmt_speed(d.speed)))
-            if d.eta:
-                parts.append("المتبقي " + ltr(fmt_eta(d.eta)))
-        self.stats.setText("    •    ".join(parts))
+            self.err.setText(d.error)
+            self.err.setVisible(True)
+        else:
+            self.err.setVisible(False)
         done = st == S["COMPLETED"]
-        running = st in (S["DOWNLOADING"], S["PROBING"], S["QUEUED"])
+        active = st in (S["DOWNLOADING"], S["PROBING"], S["QUEUED"])
         self.b_pause.setVisible(not done)
-        self.b_pause.setText("إيقاف مؤقت" if running else "استئناف")
+        self.b_pause.setText("إيقاف مؤقت" if active else ("إعادة المحاولة" if st == S["ERROR"] else "استئناف"))
         self.b_open.setVisible(done)
         self.b_cancel.setVisible(not done)
 
@@ -162,6 +338,25 @@ class ProgressWindow(QDialog):
         else:
             self.manager.resume(self.d.id)
         self.refresh()
+
+    def _apply_conn(self):
+        self.d.connections = self.spin_conn.value()
+        if self.d.state in (self._S["DOWNLOADING"], self._S["PROBING"]):    # يُعاد التشغيل ليأخذ العدد الجديد
+            self.manager.pause(self.d.id)
+            self.manager.resume(self.d.id)
+        self.manager.save()
+
+    def _apply_limit(self, v):
+        self.config["speed_limit_kb"] = int(v)
+        self.config.save()
+
+    def _apply_after(self):
+        key = self.after.currentData()
+        if self.on_after:
+            self.on_after(key)
+        else:
+            self.config["after_all"] = key
+            self.config.save()
 
     def _cancel(self):
         self.manager.remove(self.d.id)

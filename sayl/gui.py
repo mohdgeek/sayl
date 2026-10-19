@@ -565,7 +565,11 @@ class MainWindow(QMainWindow):
         dlg.activateWindow()
 
     def _show_progress(self, d):
-        w = ProgressWindow(self.manager, d, None)
+        def after(key):
+            self._set_after(key)
+            self._after_acts[key].setChecked(True)
+        w = ProgressWindow(self.manager, d, None, config=self.config, on_open_main=self.show_normal,
+                           on_after=after)
         self._progress_wins = [x for x in getattr(self, "_progress_wins", []) if x.isVisible()] + [w]
         self._front(w)
 

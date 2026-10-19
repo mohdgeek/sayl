@@ -171,7 +171,7 @@ def _progress_window_smoke():
         time.sleep(0.05)
     w.refresh()
     assert w.d.state == "completed", w.d.state
-    assert "اكتمل" in w.state.text() and w.b_open.isVisibleTo(w)
+    assert w.chip_state.text() == "مكتمل" and w.b_open.isVisibleTo(w)
     print("PROGRESS WINDOW OK")
 
 
