@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "سيل - مدير التحميل",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "description": "يلتقط التحميلات والفيديوهات من Chrome ويرسلها إلى برنامج سيل على جهازك.",
   "permissions": [
     "alarms",

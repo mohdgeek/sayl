@@ -253,6 +253,9 @@ class DownloadManager:
         for d in list(self.items.values()):
             if d.active:
                 d.pause()
+        deadline = time.monotonic() + 4          # نمهل الأجزاء ثوانيَ لتحفظ موضع الاستئناف
+        for d in list(self.items.values()):
+            d.wait(max(0.0, deadline - time.monotonic()))
         self.save()
 
     # ------------------------------------------------------------ الحفظ

@@ -78,6 +78,27 @@ def unique_path(path):
     return f"{base} ({i}){ext}"
 
 
+class NoRangeError(IOError):
+    """الخادم تجاهل Range وأعاد الملف كاملًا: نتحوّل إلى اتصال واحد."""
+
+
+def _set_sparse(f):
+    """ويندوز: بدون ملف متناثر (sparse) يملأ NTFS بالأصفار كل ما قبل أول كتابة بعيدة،
+    فيتجمّد تحميل ملف 8GB بالأجزاء المتعددة دقائق عند 0%."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        h = msvcrt.get_osfhandle(f.fileno())
+        ret = wintypes.DWORD()
+        ctypes.windll.kernel32.DeviceIoControl(wintypes.HANDLE(h), 0x000900C4, None, 0, None, 0,
+                                               ctypes.byref(ret), None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class Segment:
     __slots__ = ("start", "end", "pos")
 
@@ -160,38 +181,55 @@ class Download:
         }
 
     # ------------------------------------------------------------ التحكم
+    last_issue = ""
+
     def start(self):
         if self.active:
             return
-        self._stop.clear()
         self.error = ""
         self.state = PROBING
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"dl-{self.id}")
+        old = self._thread
+        if old is not None and old.is_alive():      # إيقاف سابق ما زال يُنهي اتصالاته: ننتظره بعيدًا عن الواجهة
+            def later():
+                old.join(timeout=40)
+                if self.state == PROBING:
+                    self._stop.clear()
+                    self._run()
+            self._thread = threading.Thread(target=later, daemon=True, name="dl-" + self.id)
+        else:
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True, name="dl-" + self.id)
         self._thread.start()
 
     def pause(self):
-        if self.state in (QUEUED,):
+        """إيقاف فوري من جهة الواجهة؛ إغلاق الاتصالات يتم في الخلفية دون تجميد البرنامج."""
+        if self.state == QUEUED:
             self.state = PAUSED
             return
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=15)
         if self.state not in (COMPLETED, ERROR, CANCELED):
             self.state = PAUSED
         self.speed = 0.0
 
+    def wait(self, timeout=3.0):
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+
     def cancel(self, delete_files=True):
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=15)
         self.state = CANCELED
+        self.speed = 0.0
         if delete_files:
-            for p in (self._tmp, self._tmp and self._tmp + ".json"):
-                if p:
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
+            def clean():
+                self.wait(40)                       # بعد أن تُغلق الاتصالات نحذف الملفات
+                for p in (self._tmp, self._tmp and self._tmp + ".json"):
+                    if p:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+            threading.Thread(target=clean, daemon=True).start()
 
     # ------------------------------------------------------------ التنفيذ
     def _req_headers(self, extra=None):
@@ -265,6 +303,7 @@ class Download:
         self.segments = [Segment(i * part, self.size if i == n - 1 else (i + 1) * part)
                          for i in range(n)]
         with open(self._tmp, "wb") as f:
+            _set_sparse(f)
             f.truncate(self.size)
 
     def _save_meta(self):
@@ -301,6 +340,8 @@ class Download:
                     hdr["If-Range"] = self.etag
                 with self._session.get(self.final_url, headers=self._req_headers(hdr),
                                        stream=True, timeout=(10, 30)) as r:
+                    if r.status_code == 200:
+                        raise NoRangeError("الخادم لا يدعم التحميل المجزّأ")
                     if r.status_code != 206:
                         raise IOError(f"استجابة غير متوقعة HTTP {r.status_code}")
                     with open(self._tmp, "r+b") as f:
@@ -320,8 +361,17 @@ class Download:
                 failures = 0 if seg.pos > start else failures + 1
                 if failures == 0 and seg.pos < seg.end:
                     continue
-            except Exception:  # noqa: BLE001
+            except NoRangeError:
+                raise
+            except Exception as e:  # noqa: BLE001
                 failures += 1
+                self.last_issue = str(e)[:200]
+                if failures == 1:
+                    try:
+                        from .setup_tools import log
+                        log(f"engine: فشل جزء ({self.filename}): {self.last_issue}")
+                    except Exception:  # noqa: BLE001
+                        pass
             if failures > MAX_RETRIES:
                 raise IOError("فشل تحميل جزء بعد عدة محاولات")
             if failures:
@@ -361,6 +411,13 @@ class Download:
         self._save_meta()
         if errors:
             self._stop.clear()
+            if isinstance(errors[0], NoRangeError):
+                self.resumable, self.segments = False, []
+                try:
+                    os.remove(self._tmp + ".json")
+                except OSError:
+                    pass
+                return self._run_single()
             raise errors[0]
         if not self._stop.is_set() and any(s.pos < s.end for s in self.segments):
             raise IOError("اكتمل التحميل جزئيًا")

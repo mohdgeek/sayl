@@ -401,36 +401,53 @@ class MediaDownload:
     def start(self):
         if self.active:
             return
-        self._stop.clear()
         self.error = ""
         self.state = PROBING
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"media-{self.id}")
+        old = self._thread
+        if old is not None and old.is_alive():      # إيقاف سابق ما زال يُنهي اتصالاته: ننتظره بعيدًا عن الواجهة
+            def later():
+                old.join(timeout=40)
+                if self.state == PROBING:
+                    self._stop.clear()
+                    self._run()
+            self._thread = threading.Thread(target=later, daemon=True, name="media-" + self.id)
+        else:
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True, name="media-" + self.id)
         self._thread.start()
 
     def pause(self):
+        """إيقاف فوري من جهة الواجهة؛ إغلاق الاتصالات يتم في الخلفية دون تجميد البرنامج."""
         if self.state == QUEUED:
             self.state = PAUSED
             return
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=20)
         if self.state not in (COMPLETED, ERROR, CANCELED):
             self.state = PAUSED
         self.speed = 0.0
 
+    def wait(self, timeout=3.0):
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+
     def cancel(self, delete_files=True):
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=20)
         self.state = CANCELED
+        self.speed = 0.0
         if delete_files and self.title:
-            base = os.path.join(self.dest_dir, sanitize_filename(self.title))
-            for suffix in (".part", ".ytdl"):
-                for p in _glob_partials(self.dest_dir, os.path.basename(base), suffix):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
+            def clean():
+                self.wait(40)
+                base = os.path.join(self.dest_dir, sanitize_filename(self.title))
+                for suffix in (".part", ".ytdl"):
+                    for p in _glob_partials(self.dest_dir, os.path.basename(base), suffix):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+                if self._tmp:
+                    shutil.rmtree(self._tmp, ignore_errors=True)
+            threading.Thread(target=clean, daemon=True).start()
 
     # ---- التنفيذ
     def _hook(self, d):
