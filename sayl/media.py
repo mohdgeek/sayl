@@ -186,7 +186,10 @@ def patch_aria2():
                 if proc.returncode:
                     try:
                         from .setup_tools import log as _syslog
-                        _syslog("aria2c رمز الخروج %s: %s" % (proc.returncode, " | ".join(tail[-6:])[:600]))
+                        import re as _re
+                        txt = _re.sub(r"https?://\S+", "<url>", " | ".join(tail[-8:]))
+                        txt = _re.sub(r"\x1b\[[0-9;]*m|\[\d+;?\d*m", "", txt)
+                        _syslog("aria2c رمز الخروج %s: %s" % (proc.returncode, txt[:700]))
                     except Exception:  # noqa: BLE001
                         pass
                 return "", "\n".join(tail[-5:]), proc.returncode
