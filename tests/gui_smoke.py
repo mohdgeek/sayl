@@ -102,3 +102,20 @@ app.processEvents()
 assert win.stack.currentIndex() == 1
 print("GUI OK")
 mgr.shutdown()
+
+
+def _file_dialog_smoke():
+    import tempfile
+    from sayl.config import Config
+    from sayl.dialogs import FileConfirmDialog
+    cfg = Config(os.path.join(tempfile.mkdtemp(), "c.json"))
+    d = FileConfirmDialog(cfg, "http://127.0.0.1:9/files/idm_al.zip", {}, None)
+    v = d.values()
+    assert v["filename"] == "idm_al.zip" and v["category"] == "archive", v
+    d.remember.setChecked(True)
+    d._finish(False)
+    assert cfg["category_dirs"]["archive"] and d.values()["start"] is False
+    print("FILE DIALOG OK")
+
+
+_file_dialog_smoke()

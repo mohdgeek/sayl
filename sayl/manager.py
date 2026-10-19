@@ -57,7 +57,7 @@ class DownloadManager:
     # ------------------------------------------------------------ العمليات
     def add(self, url, headers=None, dest_dir=None, filename=None, start=True,
             kind="auto", height=None, audio_only=False, allow_duplicate=False,
-            force=True, subs=None):
+            force=True, subs=None, subfolder=None, note=""):
         url = url.strip()
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("الرابط يجب أن يبدأ بـ http:// أو https://")
@@ -86,7 +86,8 @@ class DownloadManager:
                 raise ValueError("رابط MEGA ناقص: انسخه كاملًا مع الجزء الذي بعد علامة #")
             d = make_download(url, dest, headers=headers, connections=self.config["connections"],
                               limiter=self.limiter, filename=filename)
-        d.subfolder = bool(self.config["subfolders"])
+        d.subfolder = bool(self.config["subfolders"]) if subfolder is None else bool(subfolder)
+        d.note = note or ""
         d.force = bool(force)
         if not start:
             d.state = PAUSED
@@ -302,6 +303,7 @@ class DownloadManager:
                 d.size, d.resumable, d.etag = (e.get("size"), e.get("resumable", False),
                                                e.get("etag"))
             d.subfolder = e.get("subfolder", False)
+            d.note = e.get("note", "")
             d.final_dir = e.get("final_dir")
             d.created = e.get("created", d.created)
             d.state = state

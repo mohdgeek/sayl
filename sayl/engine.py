@@ -170,6 +170,7 @@ class Download:
         self.speed = 0.0
         self.created = time.time()
         self.single_bytes = 0          # تقدّم الوضع غير المقسّم
+        self.note = ""                 # وصف اختياري من نافذة التأكيد
         self.subfolder = False         # حفظ الملف في مجلد فرعي حسب نوعه
         self.final_dir = None          # المجلد النهائي بعد الاكتمال
         self.force = True              # يبدأ حتى خارج نافذة الجدولة
@@ -211,7 +212,7 @@ class Download:
     def to_dict(self):
         return {
             "id": self.id, "kind": "http", "url": self.url, "headers": self.headers,
-            "subfolder": self.subfolder, "final_dir": self.final_dir,
+            "subfolder": self.subfolder, "final_dir": self.final_dir, "note": self.note,
             "dest_dir": self.dest_dir, "filename": self.filename,
             "connections": self.connections, "size": self.size,
             "resumable": self.resumable, "etag": self.etag,

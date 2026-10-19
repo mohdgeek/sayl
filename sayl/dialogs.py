@@ -1,16 +1,19 @@
 """نوافذ الإضافة والإعدادات."""
+import os
 import re
 import threading
+import urllib.parse
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtCore import QTime
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
                                QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, 
                                QVBoxLayout, QWidget)
 
 from . import __version__, media, selfupdate, setup_tools, theme, updater
+from .categories import CATEGORIES, COLORS, LABELS, category_of
 from .media import find_ffmpeg, is_media_url
 from .widgets import ltr
 
@@ -57,6 +60,167 @@ def _fmt_size(n):
         if n < 1024 or u == "GB":
             return f"{n:.0f} {u}" if u == "B" else f"{n:.2f} {u}"
         n /= 1024
+
+
+class FileConfirmDialog(QDialog):
+    """نافذة «معلومات الملف» قبل التحميل (على طريقة IDM): الرابط، الفئة، مكان الحفظ، الوصف."""
+
+    def __init__(self, config, url, headers=None, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self.start = True
+        self.setWindowTitle("معلومات الملف قبل التحميل")
+        self.setMinimumWidth(620)
+        self._edited_path = False
+        try:
+            guess = os.path.basename(urllib.parse.unquote(urllib.parse.urlparse(url).path)) or "file"
+        except ValueError:
+            guess = "file"
+        self._name = guess
+
+        self.url = QLineEdit(url)
+        self.url.setReadOnly(True)
+        self.url.setLayoutDirection(Qt.LeftToRight)
+
+        self.cat = QComboBox()
+        for key, label, _ in CATEGORIES:
+            self.cat.addItem(label, key)
+        self.cat.setCurrentIndex(max(0, self.cat.findData(category_of(guess))))
+
+        self.path = QLineEdit()
+        self.path.setLayoutDirection(Qt.LeftToRight)
+        self.path.textEdited.connect(lambda *_: setattr(self, "_edited_path", True))
+        browse = QPushButton("…")
+        browse.setObjectName("Ghost")
+        browse.setFixedSize(52, 40)
+        browse.setStyleSheet("padding: 0;")
+        browse.clicked.connect(self._browse)
+
+        self.remember = QCheckBox("")
+        self.remember_path = QLineEdit()
+        self.remember_path.setReadOnly(True)
+        self.remember_path.setLayoutDirection(Qt.LeftToRight)
+
+        self.note = QLineEdit()
+        self.note.setPlaceholderText("اختياري")
+
+        self.badge = QLabel()
+        self.badge.setAlignment(Qt.AlignCenter)
+        self.badge.setFixedSize(64, 64)
+        self.size_lbl = QLabel("جارٍ قراءة معلومات الملف…")
+        self.size_lbl.setObjectName("Sub")
+        self.size_lbl.setAlignment(Qt.AlignCenter)
+        self.size_lbl.setWordWrap(True)
+        side = QVBoxLayout()
+        side.addWidget(self.badge, 0, Qt.AlignHCenter)
+        side.addWidget(self.size_lbl)
+        side.addStretch(1)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        form.setSpacing(10)
+        form.addRow("الرابط", self.url)
+        form.addRow("الفئة", self.cat)
+        prow = QHBoxLayout()
+        prow.addWidget(self.path, 1)
+        prow.addWidget(browse)
+        form.addRow("حفظ باسم", prow)
+        form.addRow(self.remember)
+        form.addRow("", self.remember_path)
+        form.addRow("الوصف", self.note)
+
+        self.btn_later = QPushButton("تحميل لاحقًا")
+        self.btn_later.setObjectName("Ghost")
+        self.btn_start = QPushButton("بدء التحميل")
+        self.btn_start.setObjectName("Primary")
+        self.btn_start.setDefault(True)
+        cancel = QPushButton("إلغاء")
+        cancel.setObjectName("Ghost")
+        self.btn_later.clicked.connect(lambda: self._finish(False))
+        self.btn_start.clicked.connect(lambda: self._finish(True))
+        cancel.clicked.connect(self.reject)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(self.btn_later)
+        btns.addWidget(self.btn_start)
+        btns.addWidget(cancel)
+
+        top = QHBoxLayout()
+        top.addLayout(form, 1)
+        top.addLayout(side)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setSpacing(14)
+        t = QLabel("معلومات الملف")
+        t.setObjectName("PageTitle")
+        lay.addWidget(t)
+        lay.addLayout(top)
+        lay.addLayout(btns)
+
+        self.cat.currentIndexChanged.connect(self._cat_changed)
+        self.url.setCursorPosition(0)
+        self._fprobe = _FileProbe()
+        self._fprobe.done.connect(self._on_probe)
+        self._cat_changed()
+        self._fprobe.run(url, headers)
+
+    # ---- المنطق
+    def _key(self):
+        return self.cat.currentData()
+
+    def _folder_for(self, key):
+        saved = (self.config["category_dirs"] or {}).get(key)
+        if saved:
+            return saved
+        base = self.config["download_dir"]
+        return os.path.join(base, LABELS[key]) if self.config["subfolders"] else base
+
+    def _cat_changed(self):
+        key = self._key()
+        col = COLORS.get(key, "#8A91A8")
+        self.badge.setText(LABELS[key])
+        self.badge.setStyleSheet(f"background:{col}; color:#101010; border-radius:14px; font-weight:700;")
+        self.remember.setText(f"تذكّر هذا المسار لفئة «{LABELS[key]}»")
+        folder = self._folder_for(key)
+        self.remember_path.setText(folder)
+        if not self._edited_path:
+            self.path.setText(os.path.join(folder, self._name))
+            self.path.setCursorPosition(0)
+
+    def _on_probe(self, name, size):
+        if name:
+            self._name = name
+            self.cat.blockSignals(True)
+            self.cat.setCurrentIndex(max(0, self.cat.findData(category_of(name))))
+            self.cat.blockSignals(False)
+            self._cat_changed()
+            if self._edited_path:      # غيّر المستخدم المسار بيده: نبدّل الاسم فقط
+                self.path.setText(os.path.join(os.path.dirname(self.path.text()), name))
+        self.size_lbl.setText(_fmt_size(size) if size else "الحجم غير معروف")
+
+    def _browse(self):
+        f, _ = QFileDialog.getSaveFileName(self, "حفظ باسم", self.path.text())
+        if f:
+            self._edited_path = True
+            self.path.setText(f)
+            self.remember_path.setText(os.path.dirname(f))
+
+    def _finish(self, start):
+        self.start = start
+        if not self.path.text().strip():
+            return
+        if self.remember.isChecked():
+            dirs = dict(self.config["category_dirs"] or {})
+            dirs[self._key()] = os.path.dirname(self.path.text().strip())
+            self.config["category_dirs"] = dirs
+            self.config.save()
+        self.accept()
+
+    def values(self):
+        full = self.path.text().strip()
+        return {"folder": os.path.dirname(full) or self.config["download_dir"],
+                "filename": os.path.basename(full), "start": self.start,
+                "note": self.note.text().strip(), "category": self._key()}
 
 
 def _fmt_dur(sec):
@@ -902,6 +1066,29 @@ class SettingsDialog(QDialog):
         self.err_row, self.err_sw = self._swatches(["#FF6B6B", "#FF5C8A", "#FF8A4C", "#E5484D"], "err_color")
         lay.addLayout(self.err_row)
         lay.addLayout(self._custom_row("err_color", "لون مخصص…"))
+
+        lay.addWidget(self._cap("الخط"))
+        from . import fonts
+        found = fonts.thmanyah_families()
+        ftxt = ("يُستخدم الآن خط: " + "، ".join(found)) if found else (
+            "خط «ثمانية» غير مثبّت. حمّله من صفحته الرسمية (ترخيصه يمنع تضمينه في البرنامج) ثم ثبّته "
+            "في ويندوز أو ضع ملفاته في مجلد الخطوط، وأعد تشغيل سيل.")
+        fl = QLabel(ftxt)
+        fl.setObjectName("Sub")
+        fl.setWordWrap(True)
+        lay.addWidget(fl)
+        frow = QHBoxLayout()
+        b1 = QPushButton("فتح مجلد الخطوط")
+        b1.setObjectName("Ghost")
+        b1.clicked.connect(lambda: (os.makedirs(fonts.FONT_DIR, exist_ok=True),
+                                    QDesktopServices.openUrl(QUrl.fromLocalFile(fonts.FONT_DIR))))
+        b2 = QPushButton("صفحة الخط الرسمية")
+        b2.setObjectName("Ghost")
+        b2.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(fonts.OFFICIAL_PAGE)))
+        frow.addWidget(b1)
+        frow.addWidget(b2)
+        frow.addStretch(1)
+        lay.addLayout(frow)
 
         reset = QPushButton("استعادة الألوان الافتراضية")
         reset.setObjectName("Ghost")

@@ -4,7 +4,9 @@ import tempfile
 
 from . import icons
 
-FONT = '"Segoe UI Variable Text","Segoe UI","Tahoma","Noto Sans Arabic","DejaVu Sans",sans-serif'
+BASE_FONT = '"Segoe UI Variable Text","Segoe UI","Tahoma","Noto Sans Arabic","DejaVu Sans",sans-serif'
+
+FONT = BASE_FONT
 
 DARK = {
     "bg": "#0E1016", "side": "#0A0C11", "surface": "#161A23", "surface2": "#1D2230",

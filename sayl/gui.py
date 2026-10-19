@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineE
 from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, category_of, ext_of
 from .config import Config
-from .dialogs import AddDialog, SettingsDialog, WelcomeDialog
+from .dialogs import AddDialog, FileConfirmDialog, SettingsDialog, WelcomeDialog
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
 from .media import is_media_url
@@ -560,11 +560,16 @@ class MainWindow(QMainWindow):
     def open_confirm(self, url, headers, kind, preset):
         """طلب من الإضافة: أظهر النافذة لاختيار الجودة والمجلد قبل التحميل."""
         self.show_normal()
-        preset = dict(preset or {})
-        if kind != "media":
-            preset["file"] = True
-            preset["headers"] = headers
-        self.open_add(urls=url, video=(kind == "media"), headers=headers, preset=preset)
+        if kind != "media":                      # ملف عادي: نافذة «معلومات الملف» مثل IDM
+            dlg = FileConfirmDialog(self.config, url, headers, self)
+            if dlg.exec():
+                v = dlg.values()
+                self._add(url, dest_dir=v["folder"], filename=v["filename"] or None, kind="http",
+                          force=v["start"], start=v["start"], headers=headers or None,
+                          subfolder=False, note=v["note"])
+                self.set_filter("all")
+            return
+        self.open_add(urls=url, video=True, headers=headers, preset=preset)
 
     def open_add(self, urls="", video=False, headers=None, preset=None):
         dlg = AddDialog(self.config, self, urls=urls, video=video, preset=preset)
@@ -711,6 +716,11 @@ def main():
     if not lock.tryLock(100):
         QMessageBox.information(None, "سيل", "سيل يعمل بالفعل. ابحث عن أيقونته بجانب الساعة.")
         return
+    try:
+        from . import fonts
+        setup_tools.log("الخط: " + (", ".join(fonts.apply()) or "ثمانية غير مثبّت (الخط الافتراضي)"))
+    except Exception as e:  # noqa: BLE001
+        setup_tools.log(f"تعذّر تحميل الخط: {e!r}")
     app.setStyleSheet(theme.apply_config(config))
     try:
         setup_tools.register_native_host(config)      # يجعل الإضافة تعمل بلا رمز ولا منفذ
