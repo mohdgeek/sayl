@@ -20,7 +20,9 @@ DATA = os.urandom(12 * 1024 * 1024 + 12345)
 SHA = hashlib.sha256(DATA).hexdigest()
 
 
-def make_server(ranges=True, delay=0.0):
+def make_server(ranges=True, delay=0.0, hang_first=False):
+    state = {"n": 0}
+
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -36,6 +38,11 @@ def make_server(ranges=True, delay=0.0):
                 return
             start, end, code = 0, len(DATA) - 1, 200
             rng = self.headers.get("Range")
+            if hang_first and rng and rng != "bytes=0-0":
+                state["n"] += 1
+                if state["n"] == 1:             # أول طلب بعد الفحص يُعلَّق
+                    time.sleep(25)
+                    return
             if ranges and rng:
                 m = re.match(r"bytes=(\d+)-(\d*)", rng)
                 start = int(m.group(1))
@@ -216,3 +223,15 @@ def test_connections_ramp_up_when_slow(server, tmp_path):
     assert d.state == COMPLETED, d.error
     assert len(d.segments) >= 3                   # بدأ باتصال واحد ثم أضاف اتصالات
     assert sha_of(tmp_path / d.filename) == SHA
+
+
+def test_recovers_when_first_request_hangs(tmp_path):
+    srv = make_server(hang_first=True)
+    try:
+        d = Download(f"http://127.0.0.1:{srv.server_address[1]}/file.bin", str(tmp_path), connections=4)
+        d.start()
+        assert wait_for(lambda: d.state in (COMPLETED, "error"), 60), d.error
+        assert d.state == COMPLETED, d.error
+        assert sha_of(tmp_path / d.filename) == SHA
+    finally:
+        srv.shutdown()

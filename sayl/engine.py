@@ -274,6 +274,11 @@ class Download:
                 self.filename = filename_from_response(r, self.url)
         finally:
             r.close()
+            # اتصال الفحص يُترك نصف مقروء؛ بعض الخوادم تُعلّق الطلب التالي على نفس الاتصال
+            # (وهذا يفسّر أن الإيقاف المؤقت ثم الاستئناف كان يشغّله). نبدأ بجلسة نظيفة.
+            old, self._session = self._session, requests.Session()
+            self._session.cookies.update(old.cookies)
+            old.close()
 
     def _run(self):
         try:
@@ -370,8 +375,17 @@ class Download:
                 hdr = {"Range": f"bytes={start}-{end - 1}"}
                 if self.etag and not self.etag.startswith("W/"):
                     hdr["If-Range"] = self.etag
+                t0 = time.monotonic()
                 with self._session.get(self.final_url, headers=self._req_headers(hdr),
-                                       stream=True, timeout=(10, 30)) as r:
+                                       stream=True, timeout=(8, 10)) as r:
+                    if not getattr(self, "_logged_first", False):
+                        self._logged_first = True
+                        try:
+                            from .setup_tools import log
+                            log(f"engine: أول استجابة HTTP {r.status_code} بعد "
+                                f"{time.monotonic() - t0:.1f}ث ({self.filename})")
+                        except Exception:  # noqa: BLE001
+                            pass
                     if r.status_code == 200:
                         raise NoRangeError("الخادم لا يدعم التحميل المجزّأ")
                     if r.status_code != 206:
@@ -419,6 +433,7 @@ class Download:
             self._stop.set()
 
     def _run_segmented(self):
+        self._logged_first = False
         self._load_or_create_segments()
         self._seg_stop = threading.Event()
         errors = []
