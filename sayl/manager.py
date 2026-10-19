@@ -11,7 +11,7 @@ import urllib.parse
 
 from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
-                     QUEUED, Download, RateLimiter)
+                     QUEUED, Download, RateLimiter, make_download)
 from .media import MediaDownload, available as media_available, is_media_url
 from .schedule import in_window
 
@@ -79,8 +79,13 @@ class DownloadManager:
                               audio_only=audio_only, ffmpeg_path=self.config["ffmpeg_path"],
                               subs=subs)
         else:
-            d = Download(url, dest, headers=headers, connections=self.config["connections"],
-                         limiter=self.limiter, filename=filename)
+            from . import mega
+            if mega.is_folder(url):
+                raise ValueError("روابط مجلدات MEGA غير مدعومة بعد؛ افتح كل ملف على حدة وانسخ رابطه")
+            if mega.is_mega(url) and not mega.parse(url):
+                raise ValueError("رابط MEGA ناقص: انسخه كاملًا مع الجزء الذي بعد علامة #")
+            d = make_download(url, dest, headers=headers, connections=self.config["connections"],
+                              limiter=self.limiter, filename=filename)
         d.subfolder = bool(self.config["subfolders"])
         d.force = bool(force)
         if not start:
@@ -291,9 +296,9 @@ class DownloadManager:
                                   filename=e.get("filename"), id=e["id"], subs=e.get("subs"))
                 d.size = e.get("size")
             else:
-                d = Download(e["url"], e["dest_dir"], headers=e.get("headers"),
-                             connections=e.get("connections", 8), limiter=self.limiter,
-                             filename=e.get("filename"), id=e["id"])
+                d = make_download(e["url"], e["dest_dir"], headers=e.get("headers"),
+                                  connections=e.get("connections", 8), limiter=self.limiter,
+                                  filename=e.get("filename"), id=e["id"])
                 d.size, d.resumable, d.etag = (e.get("size"), e.get("resumable", False),
                                                e.get("etag"))
             d.subfolder = e.get("subfolder", False)

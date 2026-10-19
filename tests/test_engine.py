@@ -262,3 +262,59 @@ def test_dns_fallback_uses_doh_when_system_dns_fails(monkeypatch):
     res = socket.getaddrinfo("no-such-host.sayl-test.invalid", 80, 0, socket.SOCK_STREAM)
     assert res and res[0][4][0] == "127.0.0.1"
     doh.shutdown()
+
+
+def test_mega_file_download_decrypts(tmp_path, monkeypatch):
+    import base64
+    import json as _json
+    import struct
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from Cryptodome.Cipher import AES
+    from sayl import mega
+    from sayl.engine import make_download
+
+    plain = os.urandom(3 * 1024 * 1024 + 77)
+    k = struct.unpack(">8I", os.urandom(32))
+    aes_key = struct.pack(">4I", k[0] ^ k[4], k[1] ^ k[5], k[2] ^ k[6], k[3] ^ k[7])
+    nonce = struct.pack(">2I", k[4], k[5])
+    cipher = AES.new(aes_key, AES.MODE_CTR, nonce=nonce, initial_value=0).encrypt(plain)
+    attrs = b"MEGA" + _json.dumps({"n": "مرحبا file.zip"}).encode()
+    attrs += b"\0" * (-len(attrs) % 16)
+    at = AES.new(aes_key, AES.MODE_CBC, iv=b"\0" * 16).encrypt(attrs)
+    b64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    key_b64 = b64(struct.pack(">8I", *k))
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = _json.dumps([{"s": len(cipher), "at": b64(at),
+                                 "g": f"http://127.0.0.1:{srv.server_address[1]}/blob"}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(cipher)))
+            self.end_headers()
+            self.wfile.write(cipher)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(mega, "API", f"http://127.0.0.1:{srv.server_address[1]}/cs")
+    try:
+        d = make_download(f"https://mega.nz/file/AbCdEfGh#{key_b64}", str(tmp_path))
+        d.start()
+        assert wait_for(lambda: d.state in (COMPLETED, "error"), 30), d.error
+        assert d.state == COMPLETED, d.error
+        assert d.filename.endswith("file.zip")
+        assert (tmp_path / d.filename).read_bytes() == plain
+        old = make_download(f"https://mega.nz/#!AbCdEfGh!{key_b64}", str(tmp_path))
+        assert type(old).__name__ == "MegaDownload"
+        assert mega.is_folder("https://mega.nz/folder/AbCdEfGh#xyz")
+    finally:
+        srv.shutdown()

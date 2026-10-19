@@ -34,7 +34,7 @@ jobs:
         run: pyinstaller --noconfirm --clean --onefile --console --name SaylHost run_host.py
       - if: steps.v.outputs.exists == 'false'
         name: Build app
-        run: pyinstaller --noconfirm --onefile --windowed --name Sayl --icon assets/icon.ico --add-data "extension;extension" --add-data "dist/SaylHost.exe;host" --collect-all yt_dlp run_sayl.py
+        run: pyinstaller --noconfirm --onefile --windowed --name Sayl --icon assets/icon.ico --add-data "extension;extension" --add-data "dist/SaylHost.exe;host" --collect-all yt_dlp --collect-all Cryptodome run_sayl.py
       - if: steps.v.outputs.exists == 'false'
         name: Publish release
         uses: softprops/action-gh-release@v2

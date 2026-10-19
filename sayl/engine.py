@@ -598,3 +598,58 @@ class Download:
         except OSError:
             pass
         self.state = COMPLETED
+
+
+class MegaDownload(Download):
+    """ملف MEGA عام: اتصال واحد مع فك التشفير أثناء الكتابة (الرابط المؤقت يُجلب من جديد عند كل بدء)."""
+
+    def _refresh(self):
+        from . import mega
+        info = mega.fetch_info(self.url, self._session)
+        self.final_url = info["url"]
+        self.size = info["size"] or self.size
+        if not self.filename:
+            self.filename = sanitize_filename(info["name"]) if info["name"] else "mega_file"
+        self.resumable, self.etag = False, None
+
+    def _probe(self):
+        self._refresh()
+
+    def _run(self):
+        # الرابط المؤقت ينتهي، فلا نعتمد على حجم/رابط محفوظ من جلسة سابقة
+        self.size = None
+        return super()._run()
+
+    def _run_single(self):
+        from . import mega
+        self.segments = []
+        self.single_bytes = 0
+        _, aes_key, nonce = mega.parse(self.url)
+        cipher = mega.ctr(aes_key, nonce)
+        last_bytes, last_t = 0, time.monotonic()
+        with self._session.get(self.final_url, headers=self._req_headers(), stream=True,
+                               timeout=(10, 30)) as r:
+            if r.status_code >= 400:
+                raise IOError(f"HTTP {r.status_code}")
+            with open(self._tmp, "wb") as f:
+                for chunk in r.iter_content(CHUNK):
+                    if self._stop.is_set():
+                        return
+                    self.limiter.acquire(len(chunk))
+                    f.write(cipher.decrypt(chunk))
+                    self.single_bytes += len(chunk)
+                    now = time.monotonic()
+                    if now - last_t >= 0.5:
+                        inst = (self.single_bytes - last_bytes) / (now - last_t)
+                        self.speed = inst if self.speed == 0 else 0.6 * self.speed + 0.4 * inst
+                        last_bytes, last_t = self.single_bytes, now
+        if self.size and self.single_bytes != self.size:
+            raise IOError("اكتمل تنزيل MEGA ناقصًا؛ أعد المحاولة")
+
+
+def make_download(url, *args, **kw):
+    """يختار صنف التنزيل المناسب للرابط (MEGA يحتاج فك تشفير)."""
+    from . import mega
+    if mega.is_mega(url) and mega.parse(url):
+        return MegaDownload(url, *args, **kw)
+    return Download(url, *args, **kw)
