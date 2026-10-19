@@ -196,6 +196,7 @@ class Download:
     # ------------------------------------------------------------ التحكم
     last_issue = ""
     STALL_SECS = 25
+    _claimed = set()                      # مسارات مؤقتة قيد الاستخدام (تمنع حذف ملف تحميل جديد بالخطأ)
 
     def start(self):
         if self.active:
@@ -238,7 +239,7 @@ class Download:
             def clean():
                 self.wait(40)                       # بعد أن تُغلق الاتصالات نحذف الملفات
                 for p in (self._tmp, self._tmp and self._tmp + ".json"):
-                    if p:
+                    if p and self._tmp not in Download._claimed:
                         try:
                             os.remove(p)
                         except OSError:
@@ -282,6 +283,7 @@ class Download:
             if self._stop.is_set():
                 return
             self._tmp = os.path.join(self.dest_dir, self.filename + META_EXT)
+            Download._claimed.add(self._tmp)
             self.state = DOWNLOADING
             try:
                 from urllib.parse import urlparse
@@ -304,6 +306,7 @@ class Download:
             self.state = ERROR
         finally:
             self.speed = 0.0
+            Download._claimed.discard(self._tmp)
 
     # ---- وضع الأجزاء المتعددة
     def _load_or_create_segments(self):
@@ -319,10 +322,9 @@ class Download:
                     return
             except (OSError, ValueError, TypeError):
                 pass
-        n = max(1, min(self.connections, self.size // MIN_SPLIT))
-        part = self.size // n
-        self.segments = [Segment(i * part, self.size if i == n - 1 else (i + 1) * part)
-                         for i in range(n)]
+        # نبدأ باتصال واحد يغطي الملف كله، ثم تُضاف اتصالات تدريجيًا (تقسيم النصف الأكبر)،
+        # فلا تُغرق الخوادم المتحفظة باتصالات متزامنة قد تُعلَّق أو تُرفض.
+        self.segments = [Segment(0, self.size)]
         with open(self._tmp, "wb") as f:
             ok = _set_sparse(f)
             f.truncate(self.size)
@@ -421,16 +423,23 @@ class Download:
         self._seg_stop = threading.Event()
         errors = []
         threads = []
-        for seg in list(self.segments):
-            if seg.pos < seg.end:
-                t = threading.Thread(target=self._worker, args=(seg, errors), daemon=True)
-                t.start()
-                threads.append(t)
+        pending = [sg for sg in self.segments if sg.pos < sg.end]
+
+        def spawn(sg):
+            t = threading.Thread(target=self._worker, args=(sg, errors), daemon=True)
+            t.start()
+            threads.append(t)
+
+        if pending:
+            spawn(pending.pop(0))
         last_bytes, last_t, last_save = self.downloaded, time.monotonic(), 0.0
         began, base = last_t, self.downloaded
-        while any(t.is_alive() for t in threads):
+        last_grow, last_add, last_beat = last_t, last_t, last_t
+        while pending or any(t.is_alive() for t in threads):
             time.sleep(0.25)
             now = time.monotonic()
+            if self._stop.is_set() and not any(t.is_alive() for t in threads):
+                break
             if (not self._stop.is_set() and self.downloaded == base and now - began > self.STALL_SECS):
                 # لم يصل أي بايت (الخادم يرفض الاتصالات المتعددة، أو الكتابة البعيدة عالقة على القرص):
                 # نترك الخيوط العالقة ونكمل باتصال واحد في ملف جديد يُكتب بالتسلسل.
@@ -455,9 +464,28 @@ class Download:
                 threading.Thread(target=reap, daemon=True).start()
                 return self._run_single()
             cur = self.downloaded
+            if cur > last_bytes:
+                last_grow = now
             inst = (cur - last_bytes) / max(now - last_t, 1e-6)
             self.speed = inst if self.speed == 0 else 0.6 * self.speed + 0.4 * inst
             last_bytes, last_t = cur, now
+            # رفع عدد الاتصالات تدريجيًا طالما البيانات تصل فعلًا
+            alive = sum(1 for t in threads if t.is_alive())
+            if (not self._halted() and now - last_add >= 0.3 and now - last_grow < 3.0
+                    and alive < self.connections and cur > base):
+                nxt = pending.pop(0) if pending else self._steal()
+                if nxt is not None:
+                    spawn(nxt)
+                    last_add = now
+            if now - last_beat >= 10.0:
+                last_beat = now
+                try:
+                    from .setup_tools import log
+                    log(f"engine: {self.filename} {cur}/{self.size} بايت، "
+                        f"{self.speed / 1048576:.1f} MB/s، اتصالات={alive}"
+                        + (f"، آخر مشكلة: {self.last_issue}" if self.last_issue else ""))
+                except Exception:  # noqa: BLE001
+                    pass
             if now - last_save > 1.0:
                 self._save_meta()
                 last_save = now

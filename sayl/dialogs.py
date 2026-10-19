@@ -1,4 +1,5 @@
 """نوافذ الإضافة والإعدادات."""
+import re
 import threading
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -28,6 +29,36 @@ class _Probe(QObject):
         threading.Thread(target=work, daemon=True).start()
 
 
+class _FileProbe(QObject):
+    done = Signal(str, object)      # (اسم الملف، الحجم بالبايت أو None)
+
+    def run(self, url, headers=None):
+        def work():
+            try:
+                import requests
+                from .engine import filename_from_response
+                h = {"User-Agent": "Mozilla/5.0 Sayl/1.0", **(headers or {}), "Range": "bytes=0-0"}
+                with requests.get(url, headers=h, stream=True, timeout=(10, 20)) as r:
+                    size = None
+                    if r.status_code == 206:
+                        m = re.search(r"/(\d+)$", r.headers.get("Content-Range", ""))
+                        size = int(m.group(1)) if m else None
+                    else:
+                        cl = r.headers.get("Content-Length", "")
+                        size = int(cl) if cl.isdigit() else None
+                    self.done.emit(filename_from_response(r, url), size)
+            except Exception:  # noqa: BLE001
+                self.done.emit("", None)
+        threading.Thread(target=work, daemon=True).start()
+
+
+def _fmt_size(n):
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return f"{n:.0f} {u}" if u == "B" else f"{n:.2f} {u}"
+        n /= 1024
+
+
 def _fmt_dur(sec):
     if not sec:
         return ""
@@ -52,6 +83,13 @@ class AddDialog(QDialog):
         self.setMinimumWidth(560)
         self._probe = _Probe()
         self._probe.done.connect(self._on_probe)
+        self._fprobe = _FileProbe()
+        self._fprobe.done.connect(self._on_file_probe)
+        self._headers = (preset or {}).get("headers")
+        self.finfo = QLabel("")
+        self.finfo.setObjectName("Sub")
+        self.finfo.setWordWrap(True)
+        self.finfo.setVisible(False)
 
         self.urls = QPlainTextEdit(urls)
         self.urls.setPlaceholderText("ألصق رابطًا أو أكثر، رابط في كل سطر")
@@ -164,6 +202,7 @@ class AddDialog(QDialog):
         lay.addWidget(_title("الرابط"))
         lay.addWidget(self.urls)
         lay.addLayout(seg)
+        lay.addWidget(self.finfo)
         lay.addWidget(self.panel)
         lay.addWidget(_title("حفظ في"))
         lay.addLayout(frow)
@@ -180,11 +219,23 @@ class AddDialog(QDialog):
                 self.audio.setChecked(True)
             elif self._want_h:
                 self._select_height(self._want_h)
+        if (preset or {}).get("file") and urls.strip():   # ملف عادي من المتصفح: اعرض الاسم والحجم
+            self.setWindowTitle("تأكيد التحميل")
+            self.finfo.setText("جارٍ قراءة معلومات الملف…")
+            self.finfo.setVisible(True)
+            self._fprobe.run(self._first_url(), self._headers)
         if video and urls.strip():             # قادم من الإضافة: اعرض الجودات المتاحة فورًا
             from PySide6.QtCore import QTimer
             QTimer.singleShot(150, self._start_probe)
 
     # ---- المنطق
+    def _on_file_probe(self, name, size):
+        if not name and size is None:
+            self.finfo.setText("تعذّر قراءة معلومات الملف، يمكنك البدء مع ذلك.")
+            return
+        parts = [f"الملف: {name}" if name else "", f"الحجم: {_fmt_size(size)}" if size else ""]
+        self.finfo.setText("    •    ".join(x for x in parts if x))
+
     def _first_url(self):
         for line in self.urls.toPlainText().splitlines():
             if line.strip():

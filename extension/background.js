@@ -114,8 +114,8 @@ async function sendToSayl(url, { referrer = "", kind = "auto", filename = null, 
                                  audio_only = false, confirm = null } = {}) {
   const headers = await buildHeaders(url, referrer);
   if (confirm === null) {                       // الفيديو: يعرض البرنامج نافذة الجودة والمجلد أولًا
-    const s = await chrome.storage.local.get({ confirmVideo: true });
-    confirm = kind === "media" && s.confirmVideo !== false;
+    const s = await chrome.storage.local.get({ confirmVideo: true, confirmFiles: true });
+    confirm = kind === "media" ? s.confirmVideo !== false : s.confirmFiles !== false;
   }
   const r = await api("/add", { method: "POST",
     body: JSON.stringify({ url, headers, filename, kind, height, audio_only, confirm }) });

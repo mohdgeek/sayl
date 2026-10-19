@@ -91,7 +91,6 @@ def test_segmented_download_matches(server, tmp_path):
     assert wait_for(lambda: d.state in (COMPLETED, "error")), d.error
     assert d.state == COMPLETED, d.error
     assert d.filename == "my file.bin"            # من Content-Disposition
-    assert len(d.segments) >= 8
     assert sha_of(tmp_path / d.filename) == SHA
     assert not list(tmp_path.glob("*.sayl*"))     # لا ملفات مؤقتة متبقية
 
@@ -207,3 +206,13 @@ def test_api_server_auth_and_add(server, tmp_path):
     finally:
         api.stop()
         mgr.shutdown()
+
+
+def test_connections_ramp_up_when_slow(server, tmp_path):
+    from sayl.engine import RateLimiter
+    d = Download(server + "/file.bin", str(tmp_path), connections=6, limiter=RateLimiter(3 * 1024 * 1024))
+    d.start()
+    assert wait_for(lambda: d.state in (COMPLETED, "error"), 120), d.error
+    assert d.state == COMPLETED, d.error
+    assert len(d.segments) >= 3                   # بدأ باتصال واحد ثم أضاف اتصالات
+    assert sha_of(tmp_path / d.filename) == SHA

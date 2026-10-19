@@ -560,6 +560,10 @@ class MainWindow(QMainWindow):
     def open_confirm(self, url, headers, kind, preset):
         """طلب من الإضافة: أظهر النافذة لاختيار الجودة والمجلد قبل التحميل."""
         self.show_normal()
+        preset = dict(preset or {})
+        if kind != "media":
+            preset["file"] = True
+            preset["headers"] = headers
         self.open_add(urls=url, video=(kind == "media"), headers=headers, preset=preset)
 
     def open_add(self, urls="", video=False, headers=None, preset=None):

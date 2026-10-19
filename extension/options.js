@@ -11,11 +11,12 @@ async function showStatus() {
   }
 }
 
-chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0, confirmVideo: true }).then((s) => {
+chrome.storage.local.get({ port: 6800, token: "", enabled: true, minSizeMB: 0, confirmVideo: true, confirmFiles: true }).then((s) => {
   $("port").value = s.port;
   $("token").value = s.token;
   $("enabled").checked = s.enabled;
   $("confirmVideo").checked = s.confirmVideo;
+  $("confirmFiles").checked = s.confirmFiles;
   $("minSizeMB").value = s.minSizeMB;
 });
 showStatus();
@@ -26,6 +27,7 @@ $("save").addEventListener("click", async () => {
     token: $("token").value.trim(),
     enabled: $("enabled").checked,
     confirmVideo: $("confirmVideo").checked,
+    confirmFiles: $("confirmFiles").checked,
     minSizeMB: parseInt($("minSizeMB").value, 10) || 0,
   });
   const st = $("status");
