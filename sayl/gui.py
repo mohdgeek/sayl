@@ -557,22 +557,34 @@ class MainWindow(QMainWindow):
             if box.clickedButton() is not box.button(QMessageBox.Cancel):
                 power.shutdown(0)
 
+    def _front(self, dlg):
+        """يُظهر النافذة وحدها فوق كل شيء (بدون إظهار واجهة البرنامج)."""
+        dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def open_confirm(self, url, headers, kind, preset):
-        """طلب من الإضافة: أظهر النافذة لاختيار الجودة والمجلد قبل التحميل."""
-        self.show_normal()
-        if kind != "media":                      # ملف عادي: نافذة «معلومات الملف» مثل IDM
-            dlg = FileConfirmDialog(self.config, url, headers, self)
+        """طلب من الإضافة: نافذة التحميل وحدها (مثل IDM) دون إظهار الواجهة الرئيسية."""
+        if kind != "media":                      # ملف عادي: نافذة «معلومات الملف»
+            dlg = FileConfirmDialog(self.config, url, headers, None)
+            self._front(dlg)
             if dlg.exec():
                 v = dlg.values()
-                self._add(url, dest_dir=v["folder"], filename=v["filename"] or None, kind="http",
-                          force=v["start"], start=v["start"], headers=headers or None,
-                          subfolder=False, note=v["note"])
+                d = self._add(url, dest_dir=v["folder"], filename=v["filename"] or None, kind="http",
+                              force=v["start"], start=v["start"], headers=headers or None,
+                              subfolder=False, note=v["note"])
+                if d is not None and self.tray.isVisible() and self.config["notify"]:
+                    self.tray.showMessage("سيل", ("بدأ تحميل " if v["start"] else "أُضيف للتحميل لاحقًا: ")
+                                          + (v["filename"] or url[:60]), QSystemTrayIcon.Information, 3000)
                 self.set_filter("all")
             return
-        self.open_add(urls=url, video=True, headers=headers, preset=preset)
+        self.open_add(urls=url, video=True, headers=headers, preset=preset, standalone=True)
 
-    def open_add(self, urls="", video=False, headers=None, preset=None):
-        dlg = AddDialog(self.config, self, urls=urls, video=video, preset=preset)
+    def open_add(self, urls="", video=False, headers=None, preset=None, standalone=False):
+        dlg = AddDialog(self.config, None if standalone else self, urls=urls, video=video, preset=preset)
+        if standalone:
+            self._front(dlg)
         if dlg.exec():
             v = dlg.values()
             errors = []

@@ -119,3 +119,30 @@ def _file_dialog_smoke():
 
 
 _file_dialog_smoke()
+
+
+def _standalone_confirm_smoke():
+    """نافذة التأكيد تظهر وحدها: الواجهة الرئيسية تبقى مخفية ويُضاف التحميل."""
+    from sayl import gui
+    from sayl.dialogs import FileConfirmDialog
+    win.hide()
+    seen = {}
+
+    class Auto(FileConfirmDialog):
+        def exec(self):
+            seen["parent"] = self.parent()
+            seen["visible"] = self.isVisible()
+            self._finish(False)               # «تحميل لاحقًا»
+            return 1
+
+    gui.FileConfirmDialog = Auto
+    cfg["warn_duplicates"] = False           # لا نريد حوار «موجود سابقًا» هنا
+    before = len(mgr.snapshot())
+    win.open_confirm("http://127.0.0.1:%d/file.bin" % srv.server_address[1], {}, "http", {})
+    assert seen["parent"] is None and not win.isVisible(), "يجب ألا تظهر الواجهة الرئيسية"
+    assert seen["visible"], "النافذة تُعرض وحدها"
+    assert len(mgr.snapshot()) == before + 1
+    print("STANDALONE CONFIRM OK")
+
+
+_standalone_confirm_smoke()
