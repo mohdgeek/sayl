@@ -146,3 +146,33 @@ def _standalone_confirm_smoke():
 
 
 _standalone_confirm_smoke()
+
+
+def _progress_window_smoke():
+    """بعد «بدء التحميل» تبقى نافذة التقدّم ظاهرة (دون الواجهة الرئيسية) وتتابع التحميل حتى الاكتمال."""
+    from sayl import gui
+    from sayl.dialogs import FileConfirmDialog
+    win.hide()
+
+    class Auto(FileConfirmDialog):
+        def exec(self):
+            self.path.setText(os.path.join(cfg["download_dir"], "prog_test.bin"))
+            self._finish(True)
+            return 1
+
+    gui.FileConfirmDialog = Auto
+    win.open_confirm("http://127.0.0.1:%d/file.bin?p=1" % srv.server_address[1], {}, "http", {})
+    w = win._progress_wins[-1]
+    assert w.isVisible() and not win.isVisible()
+    t = time.time()
+    while time.time() - t < 40 and w.d.state != "completed":
+        app.processEvents()
+        mgr._tick()
+        time.sleep(0.05)
+    w.refresh()
+    assert w.d.state == "completed", w.d.state
+    assert "اكتمل" in w.state.text() and w.b_open.isVisibleTo(w)
+    print("PROGRESS WINDOW OK")
+
+
+_progress_window_smoke()

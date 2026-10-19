@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineE
 from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, category_of, ext_of
 from .config import Config
-from .dialogs import AddDialog, FileConfirmDialog, SettingsDialog, WelcomeDialog
+from .dialogs import AddDialog, FileConfirmDialog, ProgressWindow, SettingsDialog, WelcomeDialog
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
 from .media import is_media_url
@@ -564,6 +564,11 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
+    def _show_progress(self, d):
+        w = ProgressWindow(self.manager, d, None)
+        self._progress_wins = [x for x in getattr(self, "_progress_wins", []) if x.isVisible()] + [w]
+        self._front(w)
+
     def open_confirm(self, url, headers, kind, preset):
         """طلب من الإضافة: نافذة التحميل وحدها (مثل IDM) دون إظهار الواجهة الرئيسية."""
         if kind != "media":                      # ملف عادي: نافذة «معلومات الملف»
@@ -574,9 +579,11 @@ class MainWindow(QMainWindow):
                 d = self._add(url, dest_dir=v["folder"], filename=v["filename"] or None, kind="http",
                               force=v["start"], start=v["start"], headers=headers or None,
                               subfolder=False, note=v["note"])
-                if d is not None and self.tray.isVisible() and self.config["notify"]:
-                    self.tray.showMessage("سيل", ("بدأ تحميل " if v["start"] else "أُضيف للتحميل لاحقًا: ")
-                                          + (v["filename"] or url[:60]), QSystemTrayIcon.Information, 3000)
+                if d is not None and v["start"]:
+                    self._show_progress(d)         # تبقى نافذة التقدّم ظاهرة أثناء التحميل
+                elif d is not None and self.tray.isVisible() and self.config["notify"]:
+                    self.tray.showMessage("سيل", "أُضيف للتحميل لاحقًا: " + (v["filename"] or url[:60]),
+                                          QSystemTrayIcon.Information, 3000)
                 self.set_filter("all")
             return
         self.open_add(urls=url, video=True, headers=headers, preset=preset, standalone=True)
@@ -597,6 +604,8 @@ class MainWindow(QMainWindow):
                                   force=not v["later"], subs=v["subs"] or None,
                                   headers=headers or None)
                     skipped += d is None
+                    if standalone and d is not None and not v["later"] and len(v["urls"]) == 1:
+                        self._show_progress(d)
                 except ValueError as e:
                     errors.append(f"{u[:70]}\n{e}")
             if skipped and many:

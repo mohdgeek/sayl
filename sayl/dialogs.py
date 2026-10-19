@@ -62,6 +62,121 @@ def _fmt_size(n):
         n /= 1024
 
 
+class ProgressWindow(QDialog):
+    """نافذة تقدّم التحميل (مثل IDM): تبقى ظاهرة أثناء التحميل. إغلاقها لا يوقف التحميل."""
+
+    def __init__(self, manager, d, parent=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QProgressBar
+        from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
+        self._S = dict(COMPLETED=COMPLETED, DOWNLOADING=DOWNLOADING, ERROR=ERROR, PAUSED=PAUSED,
+                       PROBING=PROBING, QUEUED=QUEUED)
+        self.manager, self.d = manager, d
+        self.setWindowTitle("تحميل")
+        self.setMinimumWidth(520)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+
+        self.name = QLabel(d.filename or d.url)
+        self.name.setObjectName("RowName")
+        self.name.setLayoutDirection(Qt.LeftToRight)
+        self.name.setWordWrap(True)
+        self.state = QLabel("")
+        self.state.setObjectName("Sub")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(10)
+        self.stats = QLabel("")
+        self.stats.setObjectName("Meta")
+        self.stats.setWordWrap(True)
+
+        self.b_pause = QPushButton("إيقاف مؤقت")
+        self.b_pause.setObjectName("Ghost")
+        self.b_open = QPushButton("فتح الملف")
+        self.b_open.setObjectName("Ghost")
+        self.b_folder = QPushButton("فتح المجلد")
+        self.b_folder.setObjectName("Ghost")
+        self.b_cancel = QPushButton("إلغاء التحميل")
+        self.b_cancel.setObjectName("Ghost")
+        self.b_hide = QPushButton("إغلاق النافذة")
+        self.b_hide.setObjectName("Primary")
+        self.b_pause.clicked.connect(self._toggle)
+        self.b_open.clicked.connect(lambda: self._open(True))
+        self.b_folder.clicked.connect(lambda: self._open(False))
+        self.b_cancel.clicked.connect(self._cancel)
+        self.b_hide.clicked.connect(self.close)
+        btns = QHBoxLayout()
+        for b in (self.b_pause, self.b_open, self.b_folder, self.b_cancel):
+            btns.addWidget(b)
+        btns.addStretch(1)
+        btns.addWidget(self.b_hide)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 18)
+        lay.setSpacing(10)
+        lay.addWidget(self.name)
+        lay.addWidget(self.state)
+        lay.addWidget(self.bar)
+        lay.addWidget(self.stats)
+        lay.addSpacing(6)
+        lay.addLayout(btns)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(400)
+        self.refresh()
+
+    def refresh(self):
+        from .widgets import fmt_eta, fmt_size, fmt_speed, ltr
+        d, S = self.d, self._S
+        if d.filename:
+            self.name.setText(d.filename)
+        self.bar.setValue(int(d.progress * 1000))
+        st = d.state
+        text = {S["COMPLETED"]: "اكتمل التحميل", S["PAUSED"]: "متوقف مؤقتًا", S["ERROR"]: "فشل التحميل",
+                S["PROBING"]: "جارٍ الاتصال…", S["QUEUED"]: "في الانتظار"}.get(st, "جارٍ التحميل")
+        if st == S["ERROR"] and d.error:
+            text += ": " + d.error
+        self.state.setText(text)
+        parts = [f"{d.progress * 100:.1f}%"]
+        if d.size:
+            parts.append(f"{ltr(fmt_size(d.downloaded))} من {ltr(fmt_size(d.size))}")
+        elif d.downloaded:
+            parts.append(ltr(fmt_size(d.downloaded)))
+        if st == S["DOWNLOADING"] and d.speed > 1:
+            parts.append("السرعة " + ltr(fmt_speed(d.speed)))
+            if d.eta:
+                parts.append("المتبقي " + ltr(fmt_eta(d.eta)))
+        self.stats.setText("    •    ".join(parts))
+        done = st == S["COMPLETED"]
+        running = st in (S["DOWNLOADING"], S["PROBING"], S["QUEUED"])
+        self.b_pause.setVisible(not done)
+        self.b_pause.setText("إيقاف مؤقت" if running else "استئناف")
+        self.b_open.setVisible(done)
+        self.b_cancel.setVisible(not done)
+
+    def _toggle(self):
+        if self.d.state in (self._S["DOWNLOADING"], self._S["PROBING"], self._S["QUEUED"]):
+            self.manager.pause(self.d.id)
+        else:
+            self.manager.resume(self.d.id)
+        self.refresh()
+
+    def _cancel(self):
+        self.manager.remove(self.d.id)
+        self.close()
+
+    def _open(self, file):
+        d = self.d
+        p = os.path.join(d.folder, d.filename) if (file and d.filename) else d.folder
+        QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+
+    def closeEvent(self, e):
+        self._timer.stop()
+        super().closeEvent(e)
+
+
 class FileConfirmDialog(QDialog):
     """نافذة «معلومات الملف» قبل التحميل (على طريقة IDM): الرابط، الفئة، مكان الحفظ، الوصف."""
 
