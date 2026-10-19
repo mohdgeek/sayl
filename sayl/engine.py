@@ -83,6 +83,19 @@ class NoRangeError(IOError):
 
 
 def _set_sparse(f):
+    """يعيد True إن صار الملف متناثرًا فعلًا (يتحقق من السمة)."""
+    _set_sparse_raw(f)
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        a = ctypes.windll.kernel32.GetFileAttributesW(f.name)
+        return a != 0xFFFFFFFF and bool(a & 0x200)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _set_sparse_raw(f):
     """ويندوز: بدون ملف متناثر (sparse) يملأ NTFS بالأصفار كل ما قبل أول كتابة بعيدة،
     فيتجمّد تحميل ملف 8GB بالأجزاء المتعددة دقائق عند 0%."""
     if os.name != "nt":
@@ -311,8 +324,14 @@ class Download:
         self.segments = [Segment(i * part, self.size if i == n - 1 else (i + 1) * part)
                          for i in range(n)]
         with open(self._tmp, "wb") as f:
-            _set_sparse(f)
+            ok = _set_sparse(f)
             f.truncate(self.size)
+        if os.name == "nt":
+            try:
+                from .setup_tools import log
+                log(f"engine: ملف متناثر (sparse) = {'نعم' if ok else 'لا'}")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _save_meta(self):
         with self._lock:
@@ -335,9 +354,12 @@ class Download:
             self.segments.append(new)
             return new
 
+    def _halted(self):
+        return self._stop.is_set() or getattr(self, "_seg_stop", threading.Event()).is_set()
+
     def _fetch_segment(self, seg):
         failures = 0
-        while not self._stop.is_set():
+        while not self._halted():
             with self._lock:
                 if seg.pos >= seg.end:
                     return
@@ -354,7 +376,7 @@ class Download:
                         raise IOError(f"استجابة غير متوقعة HTTP {r.status_code}")
                     with open(self._tmp, "r+b") as f:
                         for chunk in r.iter_content(CHUNK):
-                            if self._stop.is_set():
+                            if self._halted():
                                 return
                             self.limiter.acquire(len(chunk))
                             with self._lock:
@@ -387,15 +409,16 @@ class Download:
 
     def _worker(self, seg, errors):
         try:
-            while seg is not None and not self._stop.is_set():
+            while seg is not None and not self._halted():
                 self._fetch_segment(seg)
-                seg = None if self._stop.is_set() else self._steal()
+                seg = None if self._halted() else self._steal()
         except Exception as e:  # noqa: BLE001
             errors.append(e)
             self._stop.set()
 
     def _run_segmented(self):
         self._load_or_create_segments()
+        self._seg_stop = threading.Event()
         errors = []
         threads = []
         for seg in list(self.segments):
@@ -405,15 +428,32 @@ class Download:
                 threads.append(t)
         last_bytes, last_t, last_save = self.downloaded, time.monotonic(), 0.0
         began, base = last_t, self.downloaded
-        self._auto_stop = False
         while any(t.is_alive() for t in threads):
             time.sleep(0.25)
             now = time.monotonic()
-            if (not self._auto_stop and not self._stop.is_set() and self.downloaded == base
-                    and now - began > self.STALL_SECS):
-                # لم يصل أي بايت: غالبًا الخادم يرفض الاتصالات المتعددة أو بطء التخصيص؛ نجرّب اتصالًا واحدًا
-                self._auto_stop = True
-                self._stop.set()
+            if (not self._stop.is_set() and self.downloaded == base and now - began > self.STALL_SECS):
+                # لم يصل أي بايت (الخادم يرفض الاتصالات المتعددة، أو الكتابة البعيدة عالقة على القرص):
+                # نترك الخيوط العالقة ونكمل باتصال واحد في ملف جديد يُكتب بالتسلسل.
+                self._seg_stop.set()
+                old_tmp = self._tmp
+                self.segments, self.resumable = [], False
+                self._tmp = old_tmp + ".single"
+                try:
+                    from .setup_tools import log
+                    log(f"engine: لا بايتات خلال {self.STALL_SECS}ث ({self.filename}) -> اتصال واحد")
+                except Exception:  # noqa: BLE001
+                    pass
+
+                def reap(threads=threads, old_tmp=old_tmp):
+                    for t in threads:
+                        t.join(timeout=600)
+                    for ext in ("", ".json"):
+                        try:
+                            os.remove(old_tmp + ext)
+                        except OSError:
+                            pass
+                threading.Thread(target=reap, daemon=True).start()
+                return self._run_single()
             cur = self.downloaded
             inst = (cur - last_bytes) / max(now - last_t, 1e-6)
             self.speed = inst if self.speed == 0 else 0.6 * self.speed + 0.4 * inst
@@ -423,21 +463,6 @@ class Download:
                 last_save = now
         for t in threads:
             t.join()
-        if self._auto_stop:
-            self._auto_stop = False
-            self._stop.clear()
-            self.segments, self.resumable = [], False
-            for ext in ("", ".json"):
-                try:
-                    os.remove(self._tmp + ext)
-                except OSError:
-                    pass
-            try:
-                from .setup_tools import log
-                log(f"engine: لا بايتات خلال {self.STALL_SECS}ث ({self.filename}) -> اتصال واحد")
-            except Exception:  # noqa: BLE001
-                pass
-            return self._run_single()
         self._save_meta()
         if errors:
             self._stop.clear()

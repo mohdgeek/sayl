@@ -564,6 +564,7 @@ def test_stalled_segments_fall_back_to_single_stream(tmp_path):
     d = Download(f"http://127.0.0.1:{srv.server_address[1]}/s.bin", str(tmp_path), connections=4,
                  limiter=RateLimiter(0))
     d.STALL_SECS = 1
+    t0 = time.monotonic()
     d.start()
     for _ in range(150):
         if d.state in ("completed", "error"):
@@ -571,4 +572,5 @@ def test_stalled_segments_fall_back_to_single_stream(tmp_path):
         time.sleep(0.1)
     srv.shutdown()
     assert d.state == "completed", d.error
+    assert time.monotonic() - t0 < 4.5          # لم ننتظر الخيوط العالقة (6ث)
     assert (tmp_path / "s.bin").read_bytes() == body
