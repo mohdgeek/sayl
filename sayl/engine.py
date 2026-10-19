@@ -330,13 +330,17 @@ class Download:
         # نبدأ باتصال واحد يغطي الملف كله، ثم تُضاف اتصالات تدريجيًا (تقسيم النصف الأكبر)،
         # فلا تُغرق الخوادم المتحفظة باتصالات متزامنة قد تُعلَّق أو تُرفض.
         self.segments = [Segment(0, self.size)]
+        # لا نحجز حجم الملف مسبقًا (truncate على 8GB قد يستغرق دقائق على بعض الأقراص):
+        # الكتابة في إزاحة بعيدة تمدّ الملف فورًا على NTFS بعد تفعيل خاصية sparse.
+        t0 = time.monotonic()
         with open(self._tmp, "wb") as f:
             ok = _set_sparse(f)
-            f.truncate(self.size)
+        self._sparse_ok = bool(ok) or os.name != "nt"
         if os.name == "nt":
             try:
                 from .setup_tools import log
-                log(f"engine: ملف متناثر (sparse) = {'نعم' if ok else 'لا'}")
+                log(f"engine: تجهيز الملف {time.monotonic() - t0:.2f}ث، sparse = "
+                    f"{'نعم' if ok else 'لا (اتصال واحد متسلسل)'}")
             except Exception:  # noqa: BLE001
                 pass
 
@@ -487,7 +491,8 @@ class Download:
             # رفع عدد الاتصالات تدريجيًا طالما البيانات تصل فعلًا
             alive = sum(1 for t in threads if t.is_alive())
             if (not self._halted() and now - last_add >= 0.3 and now - last_grow < 3.0
-                    and alive < self.connections and cur > base):
+                    and alive < (self.connections if getattr(self, '_sparse_ok', True) else 1)
+                    and cur > base):
                 nxt = pending.pop(0) if pending else self._steal()
                 if nxt is not None:
                     spawn(nxt)
@@ -545,6 +550,9 @@ class Download:
             self.size = self.single_bytes
 
     def _finish(self):
+        if self.resumable and self.size and os.path.getsize(self._tmp) < self.size:
+            with open(self._tmp, "r+b") as f:       # نادرًا: آخر جزء انتهى قبل نهاية الملف المحجوز
+                f.truncate(self.size)
         if self.size is not None and os.path.getsize(self._tmp) != self.size and self.resumable:
             raise IOError("حجم الملف النهائي لا يطابق الحجم المتوقع")
         target = self.dest_dir
