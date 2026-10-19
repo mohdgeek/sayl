@@ -235,3 +235,30 @@ def test_recovers_when_first_request_hangs(tmp_path):
         assert sha_of(tmp_path / d.filename) == SHA
     finally:
         srv.shutdown()
+
+
+def test_dns_fallback_uses_doh_when_system_dns_fails(monkeypatch):
+    import json as _json
+    import socket
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from sayl import dns_fallback
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = _json.dumps({"Answer": [{"type": 1, "data": "127.0.0.1"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    doh = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=doh.serve_forever, daemon=True).start()
+    monkeypatch.setattr(dns_fallback, "ENDPOINTS", [(f"http://127.0.0.1:{doh.server_address[1]}/dns-query", {})])
+    dns_fallback._cache.clear()
+    dns_fallback.install()
+    res = socket.getaddrinfo("no-such-host.sayl-test.invalid", 80, 0, socket.SOCK_STREAM)
+    assert res and res[0][4][0] == "127.0.0.1"
+    doh.shutdown()

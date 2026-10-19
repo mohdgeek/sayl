@@ -12,6 +12,10 @@ import requests
 
 from .categories import LABELS, category_of
 
+from . import dns_fallback  # noqa: E402
+
+dns_fallback.install()
+
 CHUNK = 64 * 1024
 MIN_SPLIT = 512 * 1024      # أصغر جزء يمكن تقسيمه
 MAX_RETRIES = 6
