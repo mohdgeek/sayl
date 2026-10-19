@@ -123,6 +123,27 @@ class Segment:
         return [self.start, self.end, self.pos]
 
 
+def friendly_error(e):
+    """يحوّل أخطاء requests الطويلة إلى سبب مفهوم يُعرض في القائمة."""
+    raw = str(e)
+    low = raw.lower()
+    m = re.search(r"port=(\d+)", raw)
+    port = f" (المنفذ {m.group(1)})" if m else ""
+    if "certificate" in low or "sslerror" in low or "ssl:" in low or "wrong version" in low:
+        return "فشل التحقق من شهادة SSL للخادم" + port + ": " + raw[-120:]
+    if "timed out" in low or "timeout" in low:
+        return "انتهت مهلة الاتصال بالخادم" + port + ": قد يحجب المنفذ جدارُ حماية أو مزوّد الإنترنت"
+    if "refused" in low or "unreachable" in low or "10061" in low or "10051" in low:
+        return "رفض الخادم الاتصال أو الشبكة غير قابلة للوصول" + port
+    if "name or service" in low or "getaddrinfo" in low or "nameresolution" in low:
+        return "تعذّر العثور على عنوان الخادم (DNS)"
+    if "connection aborted" in low or "reset" in low or "remotedisconnected" in low:
+        return "قطع الخادم الاتصال" + port + " (قد يتطلب رابطًا جديدًا أو ترويسة Referer)"
+    if "max retries" in low:
+        return "تعذّر الاتصال بالخادم" + port + ": " + raw[-120:]
+    return raw
+
+
 class Download:
     kind = "http"
 
@@ -307,8 +328,13 @@ class Download:
         except Exception as e:  # noqa: BLE001
             if self._stop.is_set():
                 return
-            self.error = str(e)
+            self.error = friendly_error(e)
             self.state = ERROR
+            try:
+                from .setup_tools import log
+                log(f"engine: فشل {self.filename or self.url[:60]}: {type(e).__name__}: {str(e)[:400]}")
+            except Exception:  # noqa: BLE001
+                pass
         finally:
             self.speed = 0.0
             Download._claimed.discard(self._tmp)
@@ -423,7 +449,7 @@ class Download:
                     except Exception:  # noqa: BLE001
                         pass
             if failures > MAX_RETRIES:
-                raise IOError("فشل تحميل جزء بعد عدة محاولات")
+                raise IOError("فشل تحميل جزء بعد عدة محاولات: " + (self.last_issue or ""))
             if failures:
                 self._stop.wait(min(2 ** failures * 0.5, 15))
 
