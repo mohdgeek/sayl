@@ -176,3 +176,24 @@ def _progress_window_smoke():
 
 
 _progress_window_smoke()
+
+
+def _update_bar_and_buttons_smoke():
+    # لافتة التحديث داخل البرنامج
+    win.bridge.upd_found.emit({"latest": "99.0.0", "asset_url": "", "page": "https://example.com", "notes": ""})
+    app.processEvents()
+    assert win.update_bar.isVisibleTo(win) and "99.0.0" in win.update_text.text()
+    assert win.update_go.text() in ("حدّث الآن", "افتح صفحة الإصدار")
+    win.update_later.click()
+    assert not win.update_bar.isVisibleTo(win)
+    # أي زر في أسفل نافذة التقدّم يُخفيها، وليست دائمة الظهور فوق النوافذ
+    w = win._progress_wins[-1]
+    w.show()
+    assert not (w.windowFlags() & Qt.WindowStaysOnTopHint)
+    w.b_main.click()
+    assert not w.isVisible()
+    win.hide()
+    print("UPDATE BAR + BUTTONS OK")
+
+
+_update_bar_and_buttons_smoke()

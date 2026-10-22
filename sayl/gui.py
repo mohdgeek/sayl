@@ -32,6 +32,9 @@ class Bridge(QObject):
     added = Signal(str)          # من خيط الخادم إلى خيط الواجهة
     hashed = Signal(str, str)    # (اسم الملف، SHA-256)
     confirm = Signal(str, object, str, object)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
+    upd_found = Signal(object)   # إصدار أحدث متوفر (معلوماته)
+    upd_prog = Signal(float)     # تقدّم تنزيل التحديث
+    upd_done = Signal(object, str)  # (مسار الملف الجاهز أو None، رسالة خطأ)
 
 
 def looks_downloadable(text):
@@ -240,6 +243,30 @@ class MainWindow(QMainWindow):
         head.addWidget(vid)
         head.addWidget(more)
         v.addLayout(head)
+
+        # لافتة التحديث (تظهر داخل البرنامج عند وجود إصدار أحدث)
+        self._upd_info = None
+        self.update_bar = QFrame()
+        self.update_bar.setObjectName("Banner")
+        ul = QHBoxLayout(self.update_bar)
+        ul.setContentsMargins(14, 8, 8, 8)
+        ul.setSpacing(10)
+        self.update_text = QLabel("")
+        self.update_go = QPushButton("حدّث الآن")
+        self.update_go.setObjectName("Primary")
+        self.update_go.setCursor(Qt.PointingHandCursor)
+        self.update_go.clicked.connect(self._update_now)
+        self.update_later = QPushButton("لاحقًا")
+        self.update_later.setObjectName("Ghost")
+        self.update_later.clicked.connect(self.update_bar.hide)
+        ul.addWidget(self.update_text, 1)
+        ul.addWidget(self.update_go)
+        ul.addWidget(self.update_later)
+        self.update_bar.hide()
+        v.addWidget(self.update_bar)
+        self.bridge.upd_found.connect(self._on_update_found)
+        self.bridge.upd_prog.connect(lambda p: self.update_text.setText(f"جارٍ تنزيل التحديث… {int(p * 100)}%"))
+        self.bridge.upd_done.connect(self._on_update_done)
 
         # لافتة الحافظة
         self.banner = QFrame()
@@ -558,8 +585,7 @@ class MainWindow(QMainWindow):
                 power.shutdown(0)
 
     def _front(self, dlg):
-        """يُظهر النافذة وحدها فوق كل شيء (بدون إظهار واجهة البرنامج)."""
-        dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        """يُظهر النافذة وحدها وتتقدّم للأمام مرة واحدة دون أن تبقى فوق بقية النوافذ."""
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
@@ -642,10 +668,14 @@ class MainWindow(QMainWindow):
         self.config.save()
 
     def check_updates_bg(self):
-        """فحص صامت عند التشغيل؛ يظهر إشعار فقط إن وُجد إصدار أحدث."""
+        """فحص صامت عند التشغيل ثم كل 6 ساعات؛ تظهر لافتة داخل البرنامج إن وُجد إصدار أحدث."""
         repo = selfupdate.clean_repo(self.config["update_repo"])
         if not repo or not self.config["auto_update_check"]:
             return
+        if not hasattr(self, "_upd_timer"):
+            self._upd_timer = QTimer(self)
+            self._upd_timer.timeout.connect(self.check_updates_bg)
+            self._upd_timer.start(6 * 3600 * 1000)
 
         def work():
             try:
@@ -653,9 +683,48 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 return
             if info["newer"]:
-                self.manager.events.append(
-                    f"يتوفر إصدار جديد من سيل ({info['latest']}). افتح الإعدادات ← التحديث.")
+                self.bridge.upd_found.emit(info)
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_found(self, info):
+        if self._upd_info and self._upd_info.get("latest") == info.get("latest") and self.update_bar.isVisible():
+            return
+        self._upd_info = info
+        self.update_text.setText(f"يتوفر إصدار جديد من سيل ({info['latest']})")
+        self.update_go.setEnabled(True)
+        self.update_go.setText("حدّث الآن" if selfupdate.can_apply() and info.get("asset_url") else "افتح صفحة الإصدار")
+        self.update_bar.show()
+        if self.config["notify"] and self.tray.isVisible():
+            self.tray.showMessage("سيل", f"يتوفر إصدار جديد ({info['latest']})", QSystemTrayIcon.Information, 4000)
+
+    def _update_now(self):
+        info = self._upd_info
+        if not info:
+            return
+        if not selfupdate.can_apply() or not info.get("asset_url"):
+            QDesktopServices.openUrl(QUrl(info.get("page", "")))
+            return
+        self.update_go.setEnabled(False)
+        self.update_later.setEnabled(False)
+        self.update_text.setText("جارٍ تنزيل التحديث… 0%")
+
+        def work():
+            try:
+                self.bridge.upd_done.emit(selfupdate.download(info, self.bridge.upd_prog.emit), "")
+            except Exception as e:  # noqa: BLE001
+                self.bridge.upd_done.emit(None, str(e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_update_done(self, path, err):
+        if not path:
+            self.update_text.setText(f"تعذّر التحديث: {err}")
+            self.update_go.setEnabled(True)
+            self.update_later.setEnabled(True)
+            return
+        self.update_text.setText("تم التنزيل. سيُعاد تشغيل سيل بالإصدار الجديد…")
+        self.manager.shutdown()
+        selfupdate.apply_and_restart(path)
+        self.quit()
 
     # ------------------------------------------------------------ الحافظة والسحب
     def show_banner(self, text, url, seconds=14):
