@@ -214,6 +214,9 @@ async function grab(msg, sender) {
   const tab = sender.tab;
   let url = msg.src && /^https?:/i.test(msg.src) ? msg.src : null;
   let kind = "auto";
+  if (msg.pageUrl && SaylLib.pageVideo(msg.pageUrl)) {
+    return sendToSayl(msg.pageUrl, { referrer: tab ? tab.url : "", kind: "media" });   // مصغّرة في الصفحة الرئيسية
+  }
   if (tab && SaylLib.pageVideo(tab.url) && (!url || /^blob:/i.test(msg.src || ""))) {
     url = tab.url; kind = "media";                        // يوتيوب وأمثاله: البرنامج يستخرج الفيديو من الصفحة
   }

@@ -1,4 +1,4 @@
-// زر «تحميل» عائم يظهر فوق أي فيديو في الصفحة عند تمرير الفأرة عليه.
+// زر «تحميل» عائم يظهر فوق أي فيديو أو مصغّرة فيديو (في الصفحة الرئيسية وقوائم الاقتراحات) عند تمرير الفأرة.
 (() => {
   if (window.__saylInjected) return;
   window.__saylInjected = true;
@@ -21,12 +21,13 @@
   const label = root.querySelector("span");
   document.documentElement.appendChild(host);
 
-  let current = null, hideTimer = null, busy = false, lastMove = 0;
+  let current = null, currentLink = "", hideTimer = null, busy = false, lastMove = 0;
 
-  function show(v) {
+  function show(v, link) {
     const r = v.getBoundingClientRect();
     if (r.width < 200 || r.height < 110 || r.bottom < 0 || r.top > innerHeight) return hide();
     current = v;
+    currentLink = link || "";
     btn.style.display = "flex";
     btn.style.top = Math.max(8, r.top + 10) + "px";
     btn.style.left = Math.max(8, r.right - 10 - btn.offsetWidth) + "px";
@@ -39,8 +40,19 @@
     const now = Date.now();
     if (now - lastMove < 120) return;
     lastMove = now;
-    const v = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.tagName === "VIDEO");
-    if (v) show(v);
+    const els = document.elementsFromPoint(e.clientX, e.clientY);
+    // مصغّرة داخل رابط فيديو معروف (يوتيوب وغيره): نحمّل ذلك الفيديو لا الصفحة المفتوحة
+    let link = "", linkEl = null;
+    for (const el of els) {
+      const a = el.closest && el.closest("a[href]");
+      if (a && typeof SaylLib !== "undefined" && SaylLib.pageVideo(a.href)) {
+        const r = a.getBoundingClientRect();
+        if (r.width >= 200 && r.height >= 110) { link = a.href; linkEl = a; break; }
+      }
+    }
+    const v = els.find((el) => el.tagName === "VIDEO");
+    if (linkEl) show(linkEl, link);
+    else if (v) show(v);
   }, { passive: true });
 
   btn.addEventListener("mouseenter", () => clearTimeout(hideTimer));
@@ -52,7 +64,7 @@
     label.textContent = "جارٍ الإرسال…";
     let res;
     try {
-      res = await chrome.runtime.sendMessage({ type: "grab", src: current.currentSrc || current.src || "" });
+      res = await chrome.runtime.sendMessage({ type: "grab", src: current.currentSrc || current.src || "", pageUrl: currentLink });
     } catch (err) {
       res = { ok: false, error: "أعد تحميل الصفحة بعد تحديث الإضافة" };
     }
