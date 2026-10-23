@@ -264,8 +264,7 @@ class DownloadRow(QFrame):
             cat = "other"
         key = (st, name, round(d.progress, 3), int(d.speed // 1024), d.size, d.error, cat,
                getattr(d, "peers", 0), getattr(d, "stage", ""), getattr(d, "hash_state", None),
-               int(max(0, (getattr(d, "retry_at", None) or 0) - time.time()) // 3) if st == ERROR else 0,
-               getattr(d, "start_at", None), getattr(d, "extract_state", None))
+               int(max(0, (getattr(d, "retry_at", None) or 0) - time.time()) // 3) if st == ERROR else 0)
         if key == self._last and not force:
             return
         self._last = key
@@ -283,9 +282,7 @@ class DownloadRow(QFrame):
             hs = getattr(d, "hash_state", None)
             parts = [ltr(fmt_size(d.size)) if d.size else "", LABELS[cat], ltr(host_of(d.url)),
                      {"ok": "✓ البصمة مطابقة", "bad": "⚠ البصمة لا تطابق",
-                      "checking": "جارٍ التحقق من البصمة…"}.get(hs, ""),
-                     {"extracting": "جارٍ فك الضغط…", "done": "✓ مفكوك", "error": "⚠ تعذّر فك الضغط"}.get(
-                         getattr(d, "extract_state", None), "")]
+                      "checking": "جارٍ التحقق من البصمة…"}.get(hs, "")]
             self._meta(" · ".join(p for p in parts if p), False)
             self.speed.setText("")
             self.eta.setText("")
@@ -307,14 +304,9 @@ class DownloadRow(QFrame):
             self.speed.setText(pct if d.progress else "")
             self.eta.setText("")
         elif st == QUEUED:
-            sa = getattr(d, "start_at", None)
-            if sa:
-                self._chip("مجدول", "idle")
-                self._meta("يبدأ " + time.strftime("%Y-%m-%d %H:%M", time.localtime(sa)), False)
-            else:
-                self._chip("في الانتظار", "idle")
-                self._meta(ltr(host_of(d.url)), False)
+            self._chip("في الانتظار", "idle")
             self.bar.set_value(d.progress, "idle")
+            self._meta(ltr(host_of(d.url)), False)
             self.speed.setText("")
             self.eta.setText("")
         else:   # يُحمَّل / يُفحص

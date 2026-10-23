@@ -3,7 +3,6 @@ import hashlib
 import os
 import sys
 import threading
-import time
 import urllib.parse
 
 from PySide6.QtCore import QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
@@ -16,11 +15,11 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QInputDialog, 
 from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, LABELS, category_of, ext_of
 from .config import Config
-from .dialogs import (AddDialog, FileConfirmDialog, SpeedTestDialog, ProgressWindow, ScheduleDialog, SettingsDialog,
+from .dialogs import (AddDialog, FileConfirmDialog, ProgressWindow, SettingsDialog,
                       StatsDialog, TorrentConfirmDialog, WelcomeDialog)
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
-from . import extract, resolvers, torrent
+from . import torrent
 from .hotkey import GlobalHotkey
 from .media import is_media_url
 from .server import ApiServer, open_pairing, start_server
@@ -50,8 +49,6 @@ def looks_downloadable(text):
     if "\n" in t or " " in t or not t.lower().startswith(("http://", "https://")):
         return False
     if torrent.is_torrent_url(t):
-        return True
-    if resolvers.handles(t) and urllib.parse.urlsplit(t).path.strip("/"):
         return True
     if is_media_url(t):
         return True
@@ -237,9 +234,6 @@ class MainWindow(QMainWindow):
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
         mm.addSeparator()
         mm.addAction("الإحصاءات…", lambda: StatsDialog(self.manager.stats, self).exec())
-        mm.addAction("اختبار الاتصال…", lambda: SpeedTestDialog(parent=self).exec())
-        mm.addAction("نسخ احتياطي…", self.do_backup)
-        mm.addAction("استعادة نسخة…", self.do_restore)
         mm.addAction("تثبيت إضافة المتصفح…", self.show_welcome)
         mm.addSeparator()
         after = mm.addMenu("بعد انتهاء الطابور")
@@ -440,7 +434,6 @@ class MainWindow(QMainWindow):
         for k, b in self.navs.items():
             b.set_count(counts.get(k, 0))
         running = sum(1 for d in snap if d.state in (DOWNLOADING, PROBING))
-        power.keep_awake(bool(running) and bool(self.config["keep_awake"]))
         sub = f"{len(items)} عنصر" + (f" · {running} قيد التحميل" if running else "")
         if self.config["schedule_enabled"] and not self.manager.schedule_open():
             sub += f" · الطابور ينتظر الساعة {self.config['sched_start']}"
@@ -541,46 +534,18 @@ class MainWindow(QMainWindow):
             m.addAction("نسخ SHA-256 للملف", lambda: self._hash(d))
             m.addAction("التحقق من بصمة الملف…", lambda: self._verify_hash(d))
             m.addAction("إعادة تسمية…", lambda: self._rename(d))
-            if extract.is_archive(d.filename or "") and d.kind != "torrent":
-                m.addAction("فك الضغط هنا", lambda: self._extract(d))
-                if d.extract_dir and os.path.isdir(d.extract_dir):
-                    m.addAction("فتح المجلد المفكوك", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(d.extract_dir)))
         m.addSeparator()
         if d.state != COMPLETED:
             running = d.state in (DOWNLOADING, PROBING, QUEUED)
             m.addAction("إيقاف مؤقت" if running else "استئناف", lambda: self._toggle(id))
             if d.kind == "http":
                 m.addAction("تحديث الرابط…", lambda: self._refresh_link(d))
-            m.addAction("جدولة البدء…", lambda: self._schedule_item(d))
-            if getattr(d, "start_at", None):
-                m.addAction("إلغاء الجدولة", lambda: self._unschedule(d))
         m.addAction("حذف", lambda: self._delete(id))
         m.exec(pos)
 
     def _copy(self, text):
         self._ignore_clip = text
         QApplication.clipboard().setText(text)
-
-    def _extract(self, d):
-        try:
-            self.manager.extract_now(d.id)
-        except ValueError as e:
-            QMessageBox.warning(self, "سيل", str(e))
-            return
-        self.show_banner(f"جارٍ فك ضغط {d.filename}…", None, 6)
-
-    def _schedule_item(self, d):
-        dlg = ScheduleDialog(self)
-        if dlg.exec():
-            try:
-                self.manager.schedule(d.id, dlg.timestamp())
-            except ValueError as e:
-                QMessageBox.warning(self, "سيل", str(e))
-                return
-            self.show_banner("تمت الجدولة: " + time.strftime("%Y-%m-%d %H:%M", time.localtime(dlg.timestamp())), None, 6)
-
-    def _unschedule(self, d):
-        self.manager.schedule(d.id, None)
 
     def _refresh_link(self, d):
         text, ok = QInputDialog.getText(self, "تحديث الرابط",
@@ -727,12 +692,8 @@ class MainWindow(QMainWindow):
                             pass
                 d = self._add(url, dest_dir=v["folder"], filename=v["filename"] or None, kind="http",
                               force=v["start"], start=v["start"], headers=headers or None,
-                              subfolder=False, note=v["note"], expected_hash=v.get("hash", ""),
-                              start_at=v.get("start_at"))
-                if d is not None and v.get("start_at"):
-                    self.show_banner("تمت الجدولة: " + time.strftime("%Y-%m-%d %H:%M", time.localtime(v["start_at"])),
-                                     None, 6)
-                elif d is not None and v["start"]:
+                              subfolder=False, note=v["note"], expected_hash=v.get("hash", ""))
+                if d is not None and v["start"]:
                     self._show_progress(d)         # تبقى نافذة التقدّم ظاهرة أثناء التحميل
                 elif d is not None and self.tray.isVisible() and self.config["notify"]:
                     self.tray.showMessage("سيل", "أُضيف للتحميل لاحقًا: " + (v["filename"] or url[:60]),
@@ -761,27 +722,6 @@ class MainWindow(QMainWindow):
         else:
             self.open_add(urls=text if text.lower().startswith(("http", "magnet:")) else "", standalone=True)
 
-    def _pick_from_page(self, url):
-        """إن كان الرابط صفحة ويب تحوي ملفات للتحميل، نعرضها ليختار المستخدم. يعيد الرابط النهائي أو ''."""
-        if is_media_url(url) or torrent.is_magnet(url) or looks_downloadable(url):
-            return url
-        from PySide6.QtWidgets import QInputDialog
-        from . import pagelinks
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            links = pagelinks.scan(url)
-        except Exception:  # noqa: BLE001
-            links = []
-        finally:
-            QApplication.restoreOverrideCursor()
-        if not links:
-            return url
-        labels = [urllib.parse.unquote(l.rsplit("/", 1)[-1].split("?")[0]) or l for l in links]
-        item, ok = QInputDialog.getItem(self, "ملفات في الصفحة",
-                                        "هذه صفحة ويب وليست ملفًا. اختر الملف المراد تحميله:",
-                                        labels, 0, False)
-        return links[labels.index(item)] if ok else ""
-
     def open_add(self, urls="", video=False, headers=None, preset=None, standalone=False):
         dlg = AddDialog(self.config, None if standalone else self, urls=urls, video=video, preset=preset)
         if standalone:
@@ -791,11 +731,7 @@ class MainWindow(QMainWindow):
             errors = []
             skipped = 0
             many = len(v["urls"]) > 1
-            if len(v["urls"]) == 1 and v["kind"] in ("auto", "http"):
-                v["urls"] = [self._pick_from_page(v["urls"][0])]
             for u in v["urls"]:
-                if not u:
-                    continue
                 try:
                     d = self._add(u, quiet=many, dest_dir=v["folder"] or None, kind=v["kind"],
                                   height=v["height"], audio_only=v["audio_only"],
@@ -830,33 +766,6 @@ class MainWindow(QMainWindow):
         open_pairing(300)
         self.show_banner("جاهز للربط: افتح خيارات إضافة سيل في Chrome واضغط «ربط تلقائي» (خلال 5 دقائق).",
                          None, 20)
-
-    def do_backup(self):
-        from PySide6.QtWidgets import QFileDialog
-        from . import backup
-        import datetime
-        f, _ = QFileDialog.getSaveFileName(self, "حفظ نسخة احتياطية",
-                                           f"sayl-backup-{datetime.date.today()}.zip", "Zip (*.zip)")
-        if f:
-            try:
-                backup.make_backup(self.manager, self.config, f)
-                QMessageBox.information(self, "Sayl", "تم حفظ النسخة الاحتياطية.")
-            except OSError as e:
-                QMessageBox.warning(self, "Sayl", f"تعذّر الحفظ: {e}")
-
-    def do_restore(self):
-        from PySide6.QtWidgets import QFileDialog
-        from . import backup
-        f, _ = QFileDialog.getOpenFileName(self, "اختر نسخة احتياطية", "", "Zip (*.zip)")
-        if not f:
-            return
-        try:
-            n = backup.restore_backup(self.manager, self.config, f)
-        except (OSError, ValueError, KeyError) as e:
-            QMessageBox.warning(self, "Sayl", f"تعذّرت الاستعادة: {e}")
-            return
-        QMessageBox.information(self, "Sayl", f"تمت الاستعادة: أُضيف {n} تحميل. أعد تشغيل البرنامج لتطبيق كل الإعدادات.")
-        self.refresh()
 
     def show_welcome(self):
         WelcomeDialog(self.config, self).exec()
@@ -992,7 +901,6 @@ class MainWindow(QMainWindow):
             self.quit()
 
     def quit(self):
-        power.keep_awake(False)
         self.manager.shutdown()
         self.tray.hide()
         QApplication.quit()

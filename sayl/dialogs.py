@@ -40,13 +40,8 @@ class _FileProbe(QObject):
         def work():
             try:
                 import requests
-                from . import resolvers
                 from .engine import filename_from_response
                 h = {"User-Agent": "Mozilla/5.0 Sayl/1.0", **(headers or {}), "Range": "bytes=0-0"}
-                hint = ""
-                if resolvers.handles(url):                  # Drive/MediaFire/Dropbox/تيليجرام: الرابط المباشر أولًا
-                    info = resolvers.resolve(url, requests.Session())
-                    url, hint = info["url"], (info or {}).get("filename") or ""
                 with requests.get(url, headers=h, stream=True, timeout=(10, 20)) as r:
                     size = None
                     if r.status_code == 206:
@@ -55,102 +50,9 @@ class _FileProbe(QObject):
                     else:
                         cl = r.headers.get("Content-Length", "")
                         size = int(cl) if cl.isdigit() else None
-                    name = filename_from_response(r, url)
-                    if hint and name in ("download", "uc", ""):
-                        name = hint
-                    self.done.emit(name, size)
+                    self.done.emit(filename_from_response(r, url), size)
             except Exception:  # noqa: BLE001
                 self.done.emit("", None)
-        threading.Thread(target=work, daemon=True).start()
-
-
-def _render_pdf_first_page(data):
-    """أول صفحة من PDF كصورة (QtPdf)، أو None إن تعذّر."""
-    try:
-        from PySide6.QtCore import QBuffer, QByteArray, QSize
-        from PySide6.QtPdf import QPdfDocument
-        buf = QBuffer()
-        buf.setData(QByteArray(data))
-        buf.open(QBuffer.ReadOnly)
-        doc = QPdfDocument()
-        doc.load(buf)
-        if doc.status() != QPdfDocument.Status.Ready or doc.pageCount() < 1:
-            return None
-        size = doc.pagePointSize(0)
-        w = 520
-        h = int(w * size.height() / max(1.0, size.width()))
-        img = doc.render(0, QSize(w, h))
-        doc.close()
-        buf.close()
-        return img if not img.isNull() else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-class SpeedTestDialog(QDialog):
-    _done = Signal(object)
-
-    def __init__(self, url=None, parent=None):
-        super().__init__(parent)
-        self._url = url
-        self.setWindowTitle("اختبار الاتصال")
-        self.setMinimumWidth(420)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 20, 22, 20)
-        lay.setSpacing(12)
-        t = QLabel("اختبار الاتصال")
-        t.setObjectName("PageTitle")
-        self.out = QLabel("اضغط «ابدأ الاختبار» (يستغرق نحو 10 ثوانٍ).")
-        self.out.setWordWrap(True)
-        self.out.setTextFormat(Qt.RichText)
-        self.btn = QPushButton("ابدأ الاختبار")
-        self.btn.setObjectName("Primary")
-        self.btn.clicked.connect(self.start)
-        close = QPushButton("إغلاق")
-        close.clicked.connect(self.accept)
-        row = QHBoxLayout()
-        row.addWidget(self.btn)
-        row.addWidget(close)
-        lay.addWidget(t)
-        lay.addWidget(self.out)
-        lay.addLayout(row)
-        self._done.connect(self._show)
-
-    def start(self):
-        from . import speedtest
-        self.btn.setEnabled(False)
-        self.out.setText("جارٍ القياس…")
-        kw = {"url": self._url} if self._url else {}
-        threading.Thread(target=lambda: self._done.emit(speedtest.run(**kw)), daemon=True).start()
-
-    def _show(self, r):
-        from . import speedtest as st
-        self.btn.setEnabled(True)
-        if not r["bps"]:
-            self.out.setText("تعذّر قياس السرعة: " + (r["error"] or "لا يوجد اتصال"))
-            return
-        mbit, mb = r["bps"] * 8 / 1e6, r["bps"] / 1e6
-        lines = [f"<b>السرعة:</b> {mbit:.1f} ميغابت/ث  (≈ {mb:.1f} ميغابايت/ث)"]
-        if r["latency"] is not None:
-            lines.append(f"<b>زمن الاستجابة:</b> {r['latency']:.0f} ms")
-        if r["dns"] is not None:
-            lines.append(f"<b>DNS:</b> {r['dns']:.0f} ms")
-        lines.append("<br><b>المدة المقدّرة:</b>")
-        for label, size in (("1 غيغابايت", 1e9), ("5 غيغابايت", 5e9), ("50 غيغابايت", 50e9)):
-            lines.append(f"{label} ← {st.eta(size, r['bps'])}")
-        self.out.setText("<br>".join(lines))
-
-
-class _PreviewFetch(QObject):
-    done = Signal(object)
-
-    def run(self, url, name, size, headers):
-        def work():
-            try:
-                from . import preview
-                self.done.emit(preview.fetch(url, name, size, headers))
-            except Exception:  # noqa: BLE001
-                self.done.emit(None)
         threading.Thread(target=work, daemon=True).start()
 
 
@@ -565,10 +467,6 @@ class FileConfirmDialog(QDialog):
 
         self.btn_later = QPushButton("تحميل لاحقًا")
         self.btn_later.setObjectName("Ghost")
-        self.schedule_at = None
-        self.btn_sched = QPushButton("جدولة…")
-        self.btn_sched.setObjectName("Ghost")
-        self.btn_sched.clicked.connect(self._schedule)
         self.btn_start = QPushButton("بدء التحميل")
         self.btn_start.setObjectName("Primary")
         self.btn_start.setDefault(True)
@@ -579,7 +477,6 @@ class FileConfirmDialog(QDialog):
         cancel.clicked.connect(self.reject)
         btns = QHBoxLayout()
         btns.addStretch(1)
-        btns.addWidget(self.btn_sched)
         btns.addWidget(self.btn_later)
         btns.addWidget(self.btn_start)
         btns.addWidget(cancel)
@@ -587,21 +484,6 @@ class FileConfirmDialog(QDialog):
         top = QHBoxLayout()
         top.addLayout(form, 1)
         top.addLayout(side)
-        self.pv_box = QFrame()
-        self.pv_box.setObjectName("Card")
-        self.pv_box.setVisible(False)
-        pvl = QVBoxLayout(self.pv_box)
-        pvl.setContentsMargins(12, 10, 12, 10)
-        self.pv_title = QLabel("")
-        self.pv_title.setObjectName("Sub")
-        self.pv_img = QLabel()
-        self.pv_img.setAlignment(Qt.AlignCenter)
-        self.pv_list = QListWidget()
-        self.pv_list.setMaximumHeight(150)
-        self.pv_list.setLayoutDirection(Qt.LeftToRight)
-        pvl.addWidget(self.pv_title)
-        pvl.addWidget(self.pv_img)
-        pvl.addWidget(self.pv_list)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 20)
         lay.setSpacing(14)
@@ -609,11 +491,7 @@ class FileConfirmDialog(QDialog):
         t.setObjectName("PageTitle")
         lay.addWidget(t)
         lay.addLayout(top)
-        lay.addWidget(self.pv_box)
         lay.addLayout(btns)
-        self._headers = headers
-        self._pfetch = _PreviewFetch()
-        self._pfetch.done.connect(self._show_preview)
 
         self.cat.currentIndexChanged.connect(self._cat_changed)
         self.url.setCursorPosition(0)
@@ -649,12 +527,6 @@ class FileConfirmDialog(QDialog):
             self.path.setText(os.path.join(folder, self._name))
             self.path.setCursorPosition(0)
 
-    def _schedule(self):
-        dlg = ScheduleDialog(self)
-        if dlg.exec():
-            self.schedule_at = dlg.timestamp()
-            self._finish(True)
-
     def _on_probe(self, name, size):
         if name:
             self._name = name
@@ -665,43 +537,6 @@ class FileConfirmDialog(QDialog):
             if self._edited_path:      # غيّر المستخدم المسار بيده: نبدّل الاسم فقط
                 self.path.setText(os.path.join(os.path.dirname(self.path.text()), name))
         self.size_lbl.setText(_fmt_size(size) if size else "الحجم غير معروف")
-        from . import preview as _pv
-        if name and _pv.kind_for(name, size):
-            self.pv_title.setText("جارٍ تحميل المعاينة…")
-            self.pv_img.clear()
-            self.pv_list.hide()
-            self.pv_box.setVisible(True)
-            self._pfetch.run(self._url_text, name, size, self._headers)
-
-    def _show_preview(self, res):
-        if not res:
-            self.pv_box.setVisible(False)
-            self.adjustSize()
-            return
-        self.pv_list.setVisible(res["kind"] == "zip")
-        self.pv_img.setVisible(res["kind"] != "zip")
-        if res["kind"] == "zip":
-            self.pv_title.setText(f"محتويات الأرشيف: {res['count']} ملف · {_fmt_size(res['total'])}")
-            self.pv_list.clear()
-            for n, s in res["entries"]:
-                self.pv_list.addItem(f"{n}   ({_fmt_size(s)})")
-        elif res["kind"] == "image":
-            from PySide6.QtGui import QPixmap
-            pm = QPixmap()
-            if pm.loadFromData(res["data"]) and not pm.isNull():
-                self.pv_title.setText(f"معاينة الصورة · {pm.width()}×{pm.height()}")
-                self.pv_img.setPixmap(pm.scaled(460, 230, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            else:
-                self.pv_box.setVisible(False)
-        elif res["kind"] == "pdf":
-            img = _render_pdf_first_page(res["data"])
-            if img is not None:
-                from PySide6.QtGui import QPixmap
-                self.pv_title.setText("معاينة الصفحة الأولى")
-                self.pv_img.setPixmap(QPixmap.fromImage(img).scaledToHeight(260, Qt.SmoothTransformation))
-            else:
-                self.pv_box.setVisible(False)
-        self.adjustSize()
 
     def _browse(self):
         f, _ = QFileDialog.getSaveFileName(self, "حفظ باسم", self.path.text())
@@ -726,65 +561,7 @@ class FileConfirmDialog(QDialog):
         return {"folder": os.path.dirname(full) or self.config["download_dir"],
                 "filename": os.path.basename(full), "start": self.start,
                 "note": self.note.text().strip(), "category": self._key(),
-                "hash": self.hash.text().strip(), "start_at": self.schedule_at}
-
-
-class ScheduleDialog(QDialog):
-    """اختيار وقت بدء تحميل محدد."""
-
-    def __init__(self, parent=None, default=None):
-        super().__init__(parent)
-        from PySide6.QtCore import QDateTime
-        from PySide6.QtWidgets import QDateTimeEdit
-        self.setWindowTitle("جدولة بدء التحميل")
-        self.setMinimumWidth(380)
-        now = QDateTime.currentDateTime()
-        self.edit = QDateTimeEdit(default or now.addSecs(3600))
-        self.edit.setCalendarPopup(True)
-        self.edit.setDisplayFormat("yyyy-MM-dd  HH:mm")
-        self.edit.setMinimumDateTime(now)
-        self.edit.setLayoutDirection(Qt.LeftToRight)
-        quick = QHBoxLayout()
-        for label, secs in (("بعد ساعة", 3600), ("بعد 3 ساعات", 10800)):
-            b = QPushButton(label)
-            b.setObjectName("Ghost")
-            b.clicked.connect(lambda _=False, s=secs: self.edit.setDateTime(QDateTime.currentDateTime().addSecs(s)))
-            quick.addWidget(b)
-        tonight = QPushButton("الليلة 3:00 فجرًا")
-        tonight.setObjectName("Ghost")
-
-        def set_tonight():
-            t = QDateTime.currentDateTime()
-            t.setTime(QTime(3, 0))
-            if t <= QDateTime.currentDateTime():
-                t = t.addDays(1)
-            self.edit.setDateTime(t)
-        tonight.clicked.connect(set_tonight)
-        quick.addWidget(tonight)
-        quick.addStretch(1)
-        ok = QPushButton("جدولة")
-        ok.setObjectName("Primary")
-        ok.setDefault(True)
-        cancel = QPushButton("إلغاء")
-        cancel.setObjectName("Ghost")
-        ok.clicked.connect(self.accept)
-        cancel.clicked.connect(self.reject)
-        bl = QHBoxLayout()
-        bl.addStretch(1)
-        bl.addWidget(cancel)
-        bl.addWidget(ok)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 20, 22, 20)
-        lay.setSpacing(12)
-        t = QLabel("متى يبدأ التحميل؟")
-        t.setObjectName("PageTitle")
-        lay.addWidget(t)
-        lay.addWidget(self.edit)
-        lay.addLayout(quick)
-        lay.addLayout(bl)
-
-    def timestamp(self):
-        return float(self.edit.dateTime().toSecsSinceEpoch())
+                "hash": self.hash.text().strip()}
 
 
 class _Bars(QWidget):
@@ -1538,10 +1315,6 @@ class SettingsDialog(QDialog):
         row.addWidget(rm)
         row.addWidget(pick)
         row.addStretch(1)
-        self.extract = QCheckBox("فك ضغط الأرشيفات تلقائيًا بعد اكتمالها (zip وtar، و7z/rar يحتاجان 7-Zip)")
-        self.extract.setChecked(bool(c["auto_extract"]))
-        self.extract_del = QCheckBox("حذف الأرشيف بعد فكه بنجاح")
-        self.extract_del.setChecked(bool(c["extract_delete"]))
         self.clean = QCheckBox("تنظيف أسماء الملفات تلقائيًا (إزالة وسوم المواقع والشرطات السفلية والنقاط)")
         self.clean.setChecked(bool(c["clean_names"]))
         self.retry = QCheckBox("استئناف التحميل تلقائيًا بعد انقطاع الشبكة")
@@ -1550,8 +1323,6 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.rules_tbl)
         lay.addLayout(row)
         lay.addSpacing(6)
-        lay.addWidget(self.extract)
-        lay.addWidget(self.extract_del)
         lay.addWidget(self.clean)
         lay.addWidget(self.retry)
         lay.addStretch(1)
@@ -1653,9 +1424,6 @@ class SettingsDialog(QDialog):
         f.addRow("", self.clip)
         f.addRow("", self.notify)
         f.addRow("", self.autostart)
-        self.awake = QCheckBox("منع نوم الجهاز أثناء وجود تحميل جارٍ")
-        self.awake.setChecked(bool(c["keep_awake"]))
-        f.addRow("", self.awake)
         self.hk_on = QCheckBox("اختصار عام لإضافة رابط من أي برنامج")
         self.hk_on.setChecked(bool(c["hotkey_enabled"]))
         self.hk_key = QLineEdit(str(c["hotkey"]))
@@ -2185,8 +1953,6 @@ class SettingsDialog(QDialog):
         c["download_dir"] = self.folder.text().strip() or c["download_dir"]
         c["rules"] = self._collect_rules()
         c["clean_names"] = self.clean.isChecked()
-        c["auto_extract"] = self.extract.isChecked()
-        c["extract_delete"] = self.extract_del.isChecked()
         c["auto_retry"] = self.retry.isChecked()
         c["connections"] = self.conns.value()
         c["max_concurrent"] = self.conc.value()
@@ -2214,7 +1980,6 @@ class SettingsDialog(QDialog):
             except OSError:
                 pass
         from . import hotkey as _hk
-        c["keep_awake"] = self.awake.isChecked()
         c["hotkey_enabled"] = self.hk_on.isChecked()
         if _hk.parse(self.hk_key.text()):
             c["hotkey"] = self.hk_key.text().strip()
