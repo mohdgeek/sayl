@@ -14,7 +14,7 @@ from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, Download, RateLimiter, make_download)
 from . import engine, rules, torrent
-from .categories import category_of
+from .categories import LABELS, category_of
 from .torrent import is_magnet
 from .media import MediaDownload, available as media_available, is_media_url
 from .schedule import in_window
@@ -172,6 +172,8 @@ class DownloadManager:
             kind = "media" if is_media_url(url) else "http"
         dest = (dest_dir or rules.folder_for(self.config, url, filename, category_of(filename or "", kind))
                 or self.config["download_dir"])
+        if kind == "torrent" and not dest_dir and dest == self.config["download_dir"] and self.config["subfolders"]:
+            dest = os.path.join(dest, LABELS["torrent"])       # الترتيب الافتراضي: مجلد «تورنت»
         if kind == "torrent":
             if not torrent.available():
                 raise ValueError("دعم التورنت يحتاج الحزمة libtorrent (pip install libtorrent)")

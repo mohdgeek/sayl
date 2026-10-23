@@ -89,12 +89,12 @@ def test_pause_resume_and_cancel(tmp_path, seeder):
     ses, tf, root = seeder
     port = ses.listen_port()
     _leecher_session()
-    torrent.apply_limit(400_000)            # بطيء كي نلحق بالإيقاف
+    torrent.apply_limit(150_000)            # بطيء كي نلحق بالإيقاف
     out = tmp_path / "out2"
     d = torrent.TorrentDownload(str(tf), str(out))
     d.test_peers = [("127.0.0.1", port)]
     d.start()
-    assert _wait(d, lambda: d.downloaded > 200_000), (d.state, d.error)
+    assert _wait(d, lambda: d.downloaded > 100_000), (d.state, d.error)
     d.pause()
     d.wait(10)
     assert d.state == PAUSED

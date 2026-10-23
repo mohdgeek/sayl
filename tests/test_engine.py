@@ -154,6 +154,7 @@ def test_resume_from_disk_after_restart(tmp_path):
     url = f"http://127.0.0.1:{s.server_address[1]}/file.bin"
     cfg = Config(str(tmp_path / "cfg.json"))
     cfg["download_dir"] = str(tmp_path / "dl")
+    cfg["subfolders"] = False
     state = str(tmp_path / "state.json")
     try:
         m1 = DownloadManager(cfg, state_path=state)

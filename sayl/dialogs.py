@@ -752,7 +752,9 @@ class TorrentConfirmDialog(QDialog):
         self.name.setStyleSheet("font-size:15px; font-weight:700;")
         self.name.setWordWrap(True)
         from . import rules as _rules
-        self.folder = QLineEdit(_rules.folder_for(config, source, name, "torrent") or config["download_dir"])
+        default_dir = os.path.join(config["download_dir"], LABELS["torrent"]) if config["subfolders"] \
+            else config["download_dir"]
+        self.folder = QLineEdit(_rules.folder_for(config, source, name, "torrent") or default_dir)
         self.folder.setLayoutDirection(Qt.LeftToRight)
         browse = QPushButton("استعراض")
         browse.setObjectName("Ghost")
@@ -1283,7 +1285,9 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(box)
         lay.setContentsMargins(6, 16, 6, 6)
         lay.setSpacing(10)
-        intro = QLabel("احفظ الملفات تلقائيًا في مجلدات حسب الامتداد أو الموقع أو الفئة. "
+        intro = QLabel("الترتيب بالنوع يعمل تلقائيًا بدون أي قواعد (من خيار «ترتيب التحميلات» في تبويب عام): "
+                       "الفيديو في مجلد «فيديو» والمستندات في «مستندات» وهكذا داخل مجلد التنزيلات. "
+                       "هنا تضيف قواعد اختيارية تتجاوز ذلك: احفظ الملفات في مجلد آخر حسب الامتداد أو الموقع أو الفئة. "
                        "تُجرَّب القواعد من الأعلى للأسفل وأول قاعدة مطابقة تُطبَّق. "
                        "القيمة: امتدادات مفصولة بفواصل (pdf, docx) أو اسم موقع (example.com) أو مفتاح فئة "
                        "(video, audio, docs, archive, apps, images, torrent).")
@@ -1380,7 +1384,7 @@ class SettingsDialog(QDialog):
         self.limit.setSuffix(" KB/s")
         self.limit.setSpecialValueText("بلا حد")
         self.limit.setValue(c["speed_limit_kb"])
-        self.subfolders = QCheckBox("ترتيب الملفات تلقائيًا في مجلدات (فيديو، مستندات، …)")
+        self.subfolders = QCheckBox("ترتيب التحميلات تلقائيًا في مجلدات حسب النوع (فيديو، مستندات، ضغط، برامج، صور، تورنت)")
         self.subfolders.setChecked(c["subfolders"])
         self.dups = QCheckBox("تنبيه عند تحميل رابط أو ملف موجود سابقًا")
         self.dups.setChecked(c["warn_duplicates"])

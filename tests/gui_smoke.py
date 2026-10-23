@@ -21,6 +21,7 @@ from test_engine import SHA, make_server, sha_of  # noqa: E402
 tmp = tempfile.mkdtemp()
 cfg = Config(os.path.join(tmp, "cfg.json"))
 cfg["download_dir"] = os.path.join(tmp, "dl")
+cfg["subfolders"] = False
 mgr = DownloadManager(cfg, state_path=os.path.join(tmp, "s.json"))
 srv = make_server(delay=0.002)
 

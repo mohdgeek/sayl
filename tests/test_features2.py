@@ -187,3 +187,23 @@ def test_completed_counted_once(tmp_path):
     m2 = DownloadManager(cfg, state_path=str(tmp_path / "s.json"), autostart=False)
     m2._count_completed()
     assert m2.stats.data["total"] == 4096          # لم يُعَد عدّه بعد إعادة التشغيل
+
+
+def test_default_sorting_and_migration(tmp_path):
+    import json as _j
+    from sayl.manager import DownloadManager
+    p = tmp_path / "old.json"
+    p.write_text(_j.dumps({"subfolders": False, "download_dir": str(tmp_path / "dl")}), encoding="utf-8")
+    cfg = Config(str(p))
+    assert cfg["subfolders"] is True                      # ترحيل لمرة واحدة
+    cfg["subfolders"] = False                             # المستخدم عطّله بنفسه بعد ذلك
+    cfg.save()
+    assert Config(str(p))["subfolders"] is False          # لا يُفرض عليه ثانية
+    fresh = Config(str(tmp_path / "new.json"))
+    assert fresh["subfolders"] is True
+    fresh["download_dir"] = str(tmp_path / "dl2")
+    m = DownloadManager(fresh, state_path=str(tmp_path / "s.json"), autostart=False)
+    t = m.add("magnet:?xt=urn:btih:" + "cd" * 20, start=False)
+    assert t.dest_dir == os.path.join(str(tmp_path / "dl2"), "تورنت")
+    v = m.add("https://x.example/clip.mp4", start=False)
+    assert v.subfolder is True and v.dest_dir == str(tmp_path / "dl2")    # يُرتَّب عند الاكتمال إلى «فيديو»

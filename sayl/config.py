@@ -30,7 +30,8 @@ DEFAULTS = {
     "ok_color": "",            # لون النجاح (فارغ = الافتراضي)
     "err_color": "",           # لون الخطأ (فارغ = الافتراضي)
     # المميزات
-    "subfolders": False,       # حفظ كل نوع في مجلد فرعي (فيديو، مستندات…)
+    "subfolders": True,        # حفظ كل نوع في مجلد فرعي (فيديو، مستندات…) — افتراضيًا مفعّل
+    "sorted_v2": False,        # ترحيل لمرة واحدة: تفعيل الترتيب التلقائي لمن كان معطّلًا
     "warn_duplicates": True,   # تنبيه عند تكرار رابط أو ملف
     "subtitles": False,        # تنزيل ترجمة الفيديو
     "sub_langs": "ar,en",
@@ -71,8 +72,14 @@ class Config:
                 self.data.update(json.load(f))
         except (OSError, ValueError):
             pass
+        migrated = False
+        if not self.data.get("sorted_v2"):         # الترتيب بالنوع صار افتراضيًا للجميع (مرة واحدة)
+            self.data["subfolders"], self.data["sorted_v2"] = True, True
+            migrated = True
         if not self.data.get("token"):
             self.data["token"] = secrets.token_urlsafe(24)
+            migrated = True
+        if migrated:
             self.save()
 
     def save(self):
