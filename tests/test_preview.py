@@ -82,3 +82,11 @@ def test_eta_speed():
     from sayl import speedtest
     assert "دقيقة" in speedtest.eta(1e9, 5e6)
     assert speedtest.eta(1, 0) == "—"
+
+
+def test_pagelinks_extract():
+    from sayl import pagelinks
+    html_ = ('<a href="https://github.com/a/r/releases/download/v1/App-1.4.exe">x</a>'
+             '<a href="/files/b.zip?x=1">z</a><a href="/about">no</a><a href="mailto:a@b.c">m</a>')
+    r = pagelinks.extract(html_, "https://site.io/p/")
+    assert r == ["https://github.com/a/r/releases/download/v1/App-1.4.exe", "https://site.io/files/b.zip?x=1"]

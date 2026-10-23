@@ -761,6 +761,27 @@ class MainWindow(QMainWindow):
         else:
             self.open_add(urls=text if text.lower().startswith(("http", "magnet:")) else "", standalone=True)
 
+    def _pick_from_page(self, url):
+        """إن كان الرابط صفحة ويب تحوي ملفات للتحميل، نعرضها ليختار المستخدم. يعيد الرابط النهائي أو ''."""
+        if is_media_url(url) or torrent.is_magnet(url) or looks_downloadable(url):
+            return url
+        from PySide6.QtWidgets import QInputDialog
+        from . import pagelinks
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            links = pagelinks.scan(url)
+        except Exception:  # noqa: BLE001
+            links = []
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not links:
+            return url
+        labels = [urllib.parse.unquote(l.rsplit("/", 1)[-1].split("?")[0]) or l for l in links]
+        item, ok = QInputDialog.getItem(self, "ملفات في الصفحة",
+                                        "هذه صفحة ويب وليست ملفًا. اختر الملف المراد تحميله:",
+                                        labels, 0, False)
+        return links[labels.index(item)] if ok else ""
+
     def open_add(self, urls="", video=False, headers=None, preset=None, standalone=False):
         dlg = AddDialog(self.config, None if standalone else self, urls=urls, video=video, preset=preset)
         if standalone:
@@ -770,7 +791,11 @@ class MainWindow(QMainWindow):
             errors = []
             skipped = 0
             many = len(v["urls"]) > 1
+            if len(v["urls"]) == 1 and v["kind"] in ("auto", "http"):
+                v["urls"] = [self._pick_from_page(v["urls"][0])]
             for u in v["urls"]:
+                if not u:
+                    continue
                 try:
                     d = self._add(u, quiet=many, dest_dir=v["folder"] or None, kind=v["kind"],
                                   height=v["height"], audio_only=v["audio_only"],

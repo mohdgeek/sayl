@@ -65,8 +65,7 @@ const SaylLib = (() => {
       (ctype.startsWith("application/") && !RENDERABLE.test(ctype) && ctype !== "application/pdf");
     const byExt = ARCHIVE.test(url.split("?")[0]) || ARCHIVE.test(url);
     if (!(attach || binary || (byExt && !ctype.startsWith("text/")))) return null;
-    const size = sizeOf(headers);
-    if (size !== null && size < MIN_SIZE) return null;
+    const size = sizeOf(headers);      // الملفات الصغيرة (مثبّتات صغيرة، مستندات) تُلتقط أيضًا
     let label = "";
     const fn = disp.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i);
     if (fn) { const e = fn[1].match(/\.([A-Za-z0-9]{1,6})$/); if (e) label = e[1]; }
