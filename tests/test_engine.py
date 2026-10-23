@@ -437,3 +437,55 @@ def test_refresh_url_resumes_partial(tmp_path):
         assert hashlib.sha256(open(out, "rb").read()).hexdigest() == SHA
     finally:
         s.shutdown()
+
+
+def test_host_resolver_integration(tmp_path, monkeypatch):
+    """رابط Dropbox/Drive يُحوَّل إلى رابط مباشر عند البدء (وفي كل استئناف) ثم يُنزَّل عاديًا."""
+    from sayl import resolvers
+    s = make_server()
+    base = f"http://127.0.0.1:{s.server_address[1]}"
+    calls = []
+
+    def fake_resolve(url, session):
+        calls.append(url)
+        return {"url": base + "/file.bin", "filename": "hint.bin"}
+    monkeypatch.setattr(resolvers, "resolve", fake_resolve)
+    try:
+        d = Download("https://www.dropbox.com/s/abc/shared.bin?dl=0", str(tmp_path))
+        d.start()
+        assert wait_for(lambda: d.state in (COMPLETED, "error"), 40), d.state
+        assert d.state == COMPLETED, d.error
+        assert calls == ["https://www.dropbox.com/s/abc/shared.bin?dl=0"]
+        assert d.url.startswith("https://www.dropbox.com")          # الرابط الأصلي محفوظ للعرض
+        assert hashlib.sha256((tmp_path / d.filename).read_bytes()).hexdigest() == SHA
+    finally:
+        s.shutdown()
+
+
+def test_host_resolver_html_guard(tmp_path, monkeypatch):
+    """لو أعاد الموقع صفحة ويب بدل الملف نظهر خطأً مفهومًا بدل حفظ HTML على أنه الملف."""
+    from sayl import resolvers
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = b"<html>quota exceeded</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(resolvers, "resolve",
+                        lambda url, session: {"url": f"http://127.0.0.1:{srv.server_address[1]}/x"})
+    try:
+        d = Download("https://www.mediafire.com/file/abc/x/file", str(tmp_path))
+        d.start()
+        assert wait_for(lambda: d.state in (COMPLETED, "error"), 20)
+        assert d.state == "error" and "صفحة ويب" in d.error
+    finally:
+        srv.shutdown()

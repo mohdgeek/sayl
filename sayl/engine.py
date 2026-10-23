@@ -182,6 +182,9 @@ def friendly_error(e):
 
 class Download:
     kind = "http"
+    extract_state = None   # None | extracting | done | error
+    extract_dir = None
+    start_at = None        # وقت بدء مجدول (طابع زمني) أو None
     retries = 0            # محاولات الاستئناف التلقائي
     retry_at = None
 
@@ -315,12 +318,30 @@ class Download:
             h.update(extra)
         return h
 
+    _direct = None       # رابط مباشر محوَّل من موقع استضافة (Drive, MediaFire…)
+
+    def _resolve_host(self):
+        """مواقع الاستضافة المعروفة: نجلب الرابط المباشر من جديد عند كل بدء (الروابط المؤقتة تنتهي)."""
+        from . import resolvers
+        self._direct = None
+        if resolvers.handles(self.url):
+            info = resolvers.resolve(self.url, self._session)
+            if info:
+                self._direct = info["url"]
+                self.final_url = info["url"]
+                if info.get("filename") and not self.filename:
+                    self.filename = sanitize_filename(info["filename"])
+                    if CLEAN_NAMES:
+                        self.filename = sanitize_filename(clean_name(self.filename))
+
     def _probe(self):
-        r = self._session.get(self.url, headers=self._req_headers({"Range": "bytes=0-0"}),
+        r = self._session.get(self._direct or self.url, headers=self._req_headers({"Range": "bytes=0-0"}),
                               stream=True, timeout=(10, 30), allow_redirects=True)
         try:
             if r.status_code >= 400:
                 raise IOError(f"HTTP {r.status_code}")
+            if self._direct and "text/html" in (r.headers.get("Content-Type") or "").lower():
+                raise IOError("الموقع أعاد صفحة ويب بدل الملف (قد يكون الرابط خاصًا أو تجاوز حد التنزيل)")
             self.final_url = r.url
             self.etag = r.headers.get("ETag") or r.headers.get("Last-Modified")
             if r.status_code == 206:
@@ -346,6 +367,7 @@ class Download:
     def _run(self):
         try:
             os.makedirs(self.dest_dir, exist_ok=True)
+            self._resolve_host()
             if self.size is None or not self.filename:
                 self._probe()
             if self._stop.is_set():

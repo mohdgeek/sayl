@@ -13,7 +13,7 @@ import urllib.parse
 from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, Download, RateLimiter, make_download)
-from . import engine, rules, torrent
+from . import engine, extract, rules, torrent
 from .categories import LABELS, category_of
 from .torrent import is_magnet
 from .media import MediaDownload, available as media_available, is_media_url
@@ -157,7 +157,7 @@ class DownloadManager:
     # ------------------------------------------------------------ العمليات
     def add(self, url, headers=None, dest_dir=None, filename=None, start=True,
             kind="auto", height=None, audio_only=False, allow_duplicate=False,
-            force=True, subs=None, subfolder=None, note="", skip=None, expected_hash=""):
+            force=True, subs=None, subfolder=None, note="", skip=None, expected_hash="", start_at=None):
         url = url.strip().strip('"')
         is_tor = kind == "torrent" or torrent.is_torrent_url(url)
         if not is_tor and not url.lower().startswith(("http://", "https://")):
@@ -205,7 +205,10 @@ class DownloadManager:
         d.force = bool(force)
         d.expected_hash = normalize_hash(expected_hash)
         d.hash_state = None
-        if not start:
+        d.start_at = float(start_at) if start_at else None
+        if d.start_at:
+            d.force = False
+        if not start and not d.start_at:
             d.state = PAUSED
         with self._lock:
             self.items[d.id] = d
@@ -342,6 +345,7 @@ class DownloadManager:
         self._verify_pending()
         self._count_completed()
         self._auto_retry()
+        self._extract_pending()
         with self._lock:
             if not is_open:     # أغلقت النافذة: أوقف ما لم يُطلب يدويًا وأعده للطابور
                 for d in self.items.values():
@@ -354,7 +358,14 @@ class DownloadManager:
                 d = self.items.get(i)
                 if running >= limit:
                     break
-                if d and d.state == QUEUED and not d.active and (is_open or d.force):
+                if d and d.state == QUEUED and not d.active:
+                    if d.start_at:
+                        if time.time() < d.start_at:
+                            continue            # مجدول لوقت لاحق: لا يستهلك مكانًا في الطابور
+                        d.start_at = None
+                        d.force = True          # حان وقته: يبدأ حتى خارج نافذة الجدولة العامة
+                    elif not (is_open or d.force):
+                        continue
                     d.start()
                     running += 1
 
@@ -371,6 +382,45 @@ class DownloadManager:
                 nbytes = d.size or d.downloaded or 0
                 if nbytes:
                     self.stats.add(nbytes, host)
+
+    def _extract_pending(self):
+        """يفك الأرشيفات المكتملة تلقائيًا (إن فُعّل الخيار) في خيط خلفي."""
+        if not self.config["auto_extract"]:
+            return
+        for d in list(self.items.values()):
+            if (d.state == COMPLETED and d.extract_state is None and d.filename
+                    and extract.is_archive(d.filename)
+                    and os.path.isfile(os.path.join(d.folder, d.filename))):
+                self._start_extract(d)
+
+    def _start_extract(self, d):
+        d.extract_state = "extracting"
+        threading.Thread(target=self._extract_one, args=(d,), daemon=True, name="extract-" + d.id).start()
+
+    def _extract_one(self, d):
+        path = os.path.join(d.folder, d.filename)
+        try:
+            out = extract.extract(path, delete=bool(self.config["extract_delete"]))
+            d.extract_dir, d.extract_state = out, "done"
+            self.events.append(f"تم فك ضغط «{d.filename}» إلى {out}")
+        except (IOError, OSError) as e:
+            d.extract_state = "error"
+            d.error_extract = str(e)
+            self.events.append(f"تعذّر فك ضغط «{d.filename}»: {e}")
+        except Exception as e:  # noqa: BLE001
+            d.extract_state = "error"
+            self.events.append(f"تعذّر فك ضغط «{d.filename}»: {e}")
+        self.save()
+
+    def extract_now(self, id):
+        """فك ضغط يدوي لعنصر مكتمل (يتجاوز خيار الفك التلقائي)."""
+        d = self.items.get(id)
+        if not d or d.state != COMPLETED or not extract.is_archive(d.filename or ""):
+            raise ValueError("هذا العنصر ليس أرشيفًا مكتملًا")
+        if d.extract_state == "extracting":
+            return d
+        self._start_extract(d)
+        return d
 
     def _check_online(self):
         now = time.monotonic()
@@ -404,6 +454,23 @@ class DownloadManager:
             d.force = True
             d.state = QUEUED
             self.events.append(f"إعادة محاولة تلقائية ({n + 1}): {d.filename or d.url[:50]}")
+
+    def schedule(self, id, when):
+        """يجدول بدء عنصر في وقت محدد (طابع زمني). when=None يلغي الجدولة ويتركه متوقفًا."""
+        d = self.items.get(id)
+        if not d or d.state == COMPLETED:
+            raise ValueError("لا يمكن جدولة هذا العنصر")
+        if when is not None and when <= time.time():
+            raise ValueError("اختر وقتًا في المستقبل")
+        if d.active:
+            d.pause()
+            d.wait(10)
+        if when is None:
+            d.start_at, d.state = None, PAUSED
+        else:
+            d.start_at, d.state, d.force = float(when), QUEUED, False
+        self.save()
+        return d
 
     def refresh_url(self, id, new_url, headers=None):
         """يستبدل رابط تحميل منتهٍ/متوقف برابط جديد للملف نفسه ويكمل من حيث توقف (إن تطابق الحجم)."""
@@ -568,6 +635,9 @@ class DownloadManager:
                         it = self.items[i]
                         e = it.to_dict()
                         e["hash"] = getattr(it, "expected_hash", "")
+                        e["start_at"] = getattr(it, "start_at", None)
+                        e["extract_state"] = it.extract_state if it.extract_state in ("done", "error") else None
+                        e["extract_dir"] = it.extract_dir
                         e["hash_state"] = getattr(it, "hash_state", None) if getattr(it, "hash_state", None) in ("ok", "bad") else None
                         data.append(e)
             os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
@@ -580,13 +650,17 @@ class DownloadManager:
             except OSError:
                 pass
 
-    def _load(self):
+    def _load(self, path=None):
         try:
-            with open(self.state_path, "r", encoding="utf-8") as f:
+            with open(path or self.state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
-            return
+            return 0
+        added = 0
         for e in data:
+            if e.get("id") in self.items:
+                continue
+            added += 1
             st = e.get("state", PAUSED)
             state = COMPLETED if st == COMPLETED else PAUSED
             if e.get("kind") == "torrent":
@@ -609,11 +683,17 @@ class DownloadManager:
                                                e.get("etag"))
             d._counted = state == COMPLETED          # لا نعيد عدّ ما اكتمل في جلسات سابقة
             d.expected_hash = e.get("hash", "")
+            d.start_at = e.get("start_at")
+            d.extract_state = e.get("extract_state")
+            d.extract_dir = e.get("extract_dir")
             d.hash_state = e.get("hash_state")
             d.subfolder = e.get("subfolder", False)
             d.note = e.get("note", "")
             d.final_dir = e.get("final_dir")
             d.created = e.get("created", d.created)
             d.state = state
+            if state != COMPLETED and d.start_at and d.start_at > time.time() - 86400:
+                d.state, d.force = QUEUED, False      # الجدولة تبقى بعد إعادة التشغيل
             self.items[d.id] = d
             self._order.append(d.id)
+        return added

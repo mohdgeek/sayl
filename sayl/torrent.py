@@ -166,6 +166,9 @@ def apply_limit(rate_bytes):
 # ------------------------------------------------------------------ التنزيل
 class TorrentDownload:
     kind = "torrent"
+    extract_state = None   # None | extracting | done | error
+    extract_dir = None
+    start_at = None        # وقت بدء مجدول (طابع زمني) أو None
     retries = 0            # محاولات الاستئناف التلقائي
     retry_at = None
     resumable = True

@@ -335,6 +335,9 @@ def build_format(height=None, audio_only=False, ffmpeg=False):
 
 class MediaDownload:
     kind = "media"
+    extract_state = None   # None | extracting | done | error
+    extract_dir = None
+    start_at = None        # وقت بدء مجدول (طابع زمني) أو None
     retries = 0            # محاولات الاستئناف التلقائي
     retry_at = None
     resumable = True
