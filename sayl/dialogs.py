@@ -319,7 +319,12 @@ class ProgressWindow(QDialog):
         self.stat["speed"].setText(fmt_speed(d.speed) if running and d.speed > 1 else "—")
         self.stat["eta"].setText(fmt_eta(d.eta) if running and d.eta else "—")
         segs = getattr(d, "segments", None)
-        self.stat["conn"].setText(str(sum(1 for s in segs if s.pos < s.end)) if (segs and running) else "—")
+        if getattr(d, "kind", "") == "torrent":
+            self.stat["conn"].setText(f"{d.peers} ({d.seeds} مصدر)" if st != S["COMPLETED"] else "—")
+            if d.stage and st != S["COMPLETED"]:
+                self.chip_state.setText(d.stage.replace("…", "")[:22])
+        else:
+            self.stat["conn"].setText(str(sum(1 for s in segs if s.pos < s.end)) if (segs and running) else "—")
         self.graph.push(d.speed if running else 0)
         if st == S["ERROR"] and d.error:
             self.err.setText(d.error)
@@ -395,7 +400,8 @@ class FileConfirmDialog(QDialog):
 
         self.cat = QComboBox()
         for key, label, _ in CATEGORIES:
-            self.cat.addItem(label, key)
+            if key != "torrent":
+                self.cat.addItem(label, key)
         self.cat.setCurrentIndex(max(0, self.cat.findData(category_of(guess))))
 
         self.path = QLineEdit()
@@ -534,6 +540,79 @@ class FileConfirmDialog(QDialog):
                 "note": self.note.text().strip(), "category": self._key()}
 
 
+class TorrentConfirmDialog(QDialog):
+    """نافذة تأكيد تورنت (magnet أو ملف .torrent): الاسم المعروف ومجلد الحفظ."""
+
+    def __init__(self, config, source, parent=None):
+        super().__init__(parent)
+        from . import torrent as _tor
+        self.config = config
+        self.start = True
+        self.setWindowTitle("إضافة تورنت")
+        self.setMinimumWidth(560)
+        name = _tor.magnet_name(source) if _tor.is_magnet(source) else \
+            os.path.basename(urllib.parse.unquote(source.split("?")[0].replace("\\", "/")))
+        self.src = QLineEdit(source)
+        self.src.setReadOnly(True)
+        self.src.setLayoutDirection(Qt.LeftToRight)
+        self.src.setCursorPosition(0)
+        self.name = QLabel(name or "تورنت")
+        self.name.setObjectName("RowName")
+        self.name.setStyleSheet("font-size:15px; font-weight:700;")
+        self.name.setWordWrap(True)
+        self.folder = QLineEdit(config["download_dir"])
+        self.folder.setLayoutDirection(Qt.LeftToRight)
+        browse = QPushButton("استعراض")
+        browse.setObjectName("Ghost")
+        browse.clicked.connect(self._browse)
+        hint = QLabel("سيُنزَّل التورنت كاملًا إلى هذا المجلد، ويتوقف الرفع عند الاكتمال.")
+        hint.setObjectName("Sub")
+        hint.setWordWrap(True)
+        later = QPushButton("تحميل لاحقًا")
+        later.setObjectName("Ghost")
+        go = QPushButton("بدء التحميل")
+        go.setObjectName("Primary")
+        go.setDefault(True)
+        cancel = QPushButton("إلغاء")
+        cancel.setObjectName("Ghost")
+        later.clicked.connect(lambda: self._done(False))
+        go.clicked.connect(lambda: self._done(True))
+        cancel.clicked.connect(self.reject)
+        frow = QHBoxLayout()
+        frow.addWidget(self.folder, 1)
+        frow.addWidget(browse)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        btns.addWidget(later)
+        btns.addWidget(go)
+        btns.addWidget(cancel)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setSpacing(12)
+        t = QLabel("إضافة تورنت")
+        t.setObjectName("PageTitle")
+        lay.addWidget(t)
+        lay.addWidget(self.name)
+        lay.addWidget(_title("المصدر"))
+        lay.addWidget(self.src)
+        lay.addWidget(_title("حفظ في"))
+        lay.addLayout(frow)
+        lay.addWidget(hint)
+        lay.addLayout(btns)
+
+    def _browse(self):
+        d = QFileDialog.getExistingDirectory(self, "اختر مجلد الحفظ", self.folder.text())
+        if d:
+            self.folder.setText(d)
+
+    def _done(self, start):
+        self.start = start
+        self.accept()
+
+    def values(self):
+        return {"folder": self.folder.text().strip() or self.config["download_dir"], "start": self.start}
+
+
 def _fmt_dur(sec):
     if not sec:
         return ""
@@ -579,6 +658,10 @@ class AddDialog(QDialog):
             b.setCheckable(True)
             b.setMinimumWidth(175)
             b.setCursor(Qt.PointingHandCursor)
+        self.b_torrent = QPushButton("ملف .torrent…")
+        self.b_torrent.setObjectName("Ghost")
+        self.b_torrent.setCursor(Qt.PointingHandCursor)
+        self.b_torrent.clicked.connect(self._pick_torrent)
         self.b_file.clicked.connect(lambda: self._set_mode(False))
         self.b_video.clicked.connect(lambda: self._set_mode(True))
 
@@ -666,6 +749,7 @@ class AddDialog(QDialog):
         seg.setSpacing(8)
         seg.addWidget(self.b_file)
         seg.addWidget(self.b_video)
+        seg.addWidget(self.b_torrent)
         seg.addStretch(1)
 
         lay = QVBoxLayout(self)
@@ -717,8 +801,22 @@ class AddDialog(QDialog):
                 return line.strip()
         return ""
 
+    def _pick_torrent(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "اختر ملفات تورنت", "", "ملفات تورنت (*.torrent)")
+        if files:
+            cur = self.urls.toPlainText().strip()
+            self.urls.setPlainText("\n".join(([cur] if cur else []) + files))
+
     def _on_text(self):
         u = self._first_url()
+        from . import torrent as _tor
+        if u and _tor.is_torrent_url(u):
+            self._manual = False
+            self._set_mode(False, manual=False)
+            self.finfo.setText("تورنت: سيُحمَّل عبر شبكة BitTorrent (يبدأ بجلب بيانات الملفات من الأقران).")
+            self.finfo.setVisible(True)
+        elif not (self.finfo.text().startswith(("الملف", "جارٍ", "تعذّر")) and self.finfo.isVisible()):
+            self.finfo.setVisible(False)
         if not self._manual and u:
             self._set_mode(is_media_url(u), manual=False)
         if self._entries:
@@ -1020,6 +1118,10 @@ class SettingsDialog(QDialog):
         f.addRow("", self.clip)
         f.addRow("", self.notify)
         f.addRow("", self.autostart)
+        self.tor_assoc = QCheckBox("فتح روابط magnet وملفات .torrent بسيل (عند الضغط عليها خارج المتصفح)")
+        self.tor_assoc.setChecked(setup_tools.torrent_assoc_enabled())
+        self.tor_assoc.setVisible(setup_tools.autostart_supported())
+        f.addRow("", self.tor_assoc)
         f.addRow("", self.watch)
         f.addRow("المجلد المراقَب", wrow)
         f.addRow("رمز الإضافة", trow)
@@ -1528,6 +1630,11 @@ class SettingsDialog(QDialog):
         if setup_tools.autostart_supported():
             try:
                 setup_tools.set_autostart(self.autostart.isChecked())
+            except OSError:
+                pass
+        if setup_tools.autostart_supported() and self.tor_assoc.isChecked() != setup_tools.torrent_assoc_enabled():
+            try:
+                setup_tools.set_torrent_assoc(self.tor_assoc.isChecked())
             except OSError:
                 pass
         c["update_repo"] = selfupdate.clean_repo(self.repo.text())

@@ -197,3 +197,60 @@ def _update_bar_and_buttons_smoke():
 
 
 _update_bar_and_buttons_smoke()
+
+
+def _torrent_smoke():
+    import libtorrent as lt
+    from sayl import gui, torrent
+    root = os.path.join(tmp, "seed", "pack")
+    os.makedirs(root)
+    open(os.path.join(root, "x.bin"), "wb").write(os.urandom(800_000))
+    fs = lt.file_storage()
+    lt.add_files(fs, root)
+    t = lt.create_torrent(fs)
+    lt.set_piece_hashes(t, os.path.dirname(root))
+    tf = os.path.join(tmp, "pack.torrent")
+    open(tf, "wb").write(lt.bencode(t.generate()))
+    seed = lt.session({"listen_interfaces": "127.0.0.1:0", "enable_dht": False, "enable_lsd": False,
+                       "enable_upnp": False, "enable_natpmp": False})
+    p = lt.add_torrent_params()
+    p.ti = lt.torrent_info(tf)
+    p.save_path = os.path.dirname(root)
+    seed.add_torrent(p)
+    torrent.reset_session()
+    torrent._ses = lt.session({"listen_interfaces": "127.0.0.1:0", "enable_dht": False, "enable_lsd": False,
+                               "enable_upnp": False, "enable_natpmp": False,
+                               "allow_multiple_connections_per_ip": True})
+    torrent.TorrentDownload.test_peers = [("127.0.0.1", seed.listen_port())]
+
+    class Auto(gui.TorrentConfirmDialog):
+        def exec(self):
+            self._done(True)
+            return 1
+    gui.TorrentConfirmDialog = Auto
+    assert gui.looks_downloadable("magnet:?xt=urn:btih:" + "a" * 40)
+    win.open_confirm(tf, {}, "torrent", {})
+    w = win._progress_wins[-1]
+    assert w.d.kind == "torrent" and w.isVisible()
+    t0 = time.time()
+    while time.time() - t0 < 40 and w.d.state not in ("completed", "error"):
+        app.processEvents()
+        mgr._tick()
+        w.refresh()
+        time.sleep(0.05)
+    w.refresh()
+    assert w.d.state == "completed", (w.d.state, w.d.error)
+    assert os.path.isfile(os.path.join(cfg["download_dir"], "pack", "x.bin"))
+    win.search.setText("")
+    win.refresh(force=True)
+    win.set_filter("torrent")
+    app.processEvents()
+    assert len(win.rows) >= 1
+    win.set_filter("all")
+    w.close()
+    win.hide()
+    torrent.TorrentDownload.test_peers = []
+    print("TORRENT OK")
+
+
+_torrent_smoke()

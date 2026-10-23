@@ -112,7 +112,8 @@ async function buildHeaders(url, referrer) {
 // kind: "auto" | "http" | "media"
 async function sendToSayl(url, { referrer = "", kind = "auto", filename = null, height = null,
                                  audio_only = false, confirm = null } = {}) {
-  const headers = await buildHeaders(url, referrer);
+  const headers = /^magnet:/i.test(url) ? {} : await buildHeaders(url, referrer);
+  if (/^magnet:/i.test(url)) kind = "torrent";
   if (confirm === null) {                       // الفيديو: يعرض البرنامج نافذة الجودة والمجلد أولًا
     const s = await chrome.storage.local.get({ confirmVideo: true, confirmFiles: true });
     confirm = kind === "media" ? s.confirmVideo !== false : s.confirmFiles !== false;

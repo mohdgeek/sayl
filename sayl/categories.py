@@ -9,6 +9,7 @@ CATEGORIES = [
     ("archive", "ضغط", "#FFB020"),
     ("apps", "برامج", "#5FD39A"),
     ("images", "صور", "#2DD4BF"),
+    ("torrent", "تورنت", "#4ADE80"),
     ("other", "أخرى", "#8A91A8"),
 ]
 LABELS = {k: l for k, l, _ in CATEGORIES}
@@ -30,6 +31,8 @@ def ext_of(name):
 
 
 def category_of(filename, kind="http"):
+    if kind == "torrent":
+        return "torrent"
     if kind == "media":
         e = ext_of(filename)
         return "audio" if EXT_TO_CAT.get(e) == "audio" else "video"

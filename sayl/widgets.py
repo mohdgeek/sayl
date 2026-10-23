@@ -12,7 +12,7 @@ from .categories import COLORS, LABELS, category_of
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED)
 
 CAT_ICON = {"video": "video", "audio": "music", "docs": "doc", "archive": "zip",
-            "apps": "app", "images": "image", "other": "doc"}
+            "apps": "app", "images": "image", "torrent": "down", "other": "doc"}
 
 
 def fmt_size(n):
@@ -261,7 +261,8 @@ class DownloadRow(QFrame):
         cat = category_of(d.filename or "", d.kind)
         if d.kind == "http" and not d.filename:
             cat = "other"
-        key = (st, name, round(d.progress, 3), int(d.speed // 1024), d.size, d.error, cat)
+        key = (st, name, round(d.progress, 3), int(d.speed // 1024), d.size, d.error, cat,
+               getattr(d, "peers", 0), getattr(d, "stage", ""))
         if key == self._last and not force:
             return
         self._last = key
@@ -300,7 +301,7 @@ class DownloadRow(QFrame):
             self.speed.setText("")
             self.eta.setText("")
         else:   # يُحمَّل / يُفحص
-            self._chip("جارٍ الفحص" if st == PROBING else pct, "run")
+            self._chip(("جلب البيانات" if d.kind == "torrent" else "جارٍ الفحص") if st == PROBING else pct, "run")
             self.bar.set_value(d.progress, "run")
             extra = ""
             if d.kind == "http" and d.segments:
@@ -308,7 +309,12 @@ class DownloadRow(QFrame):
                 extra = f" · {ltr(str(live))} اتصالات"
             elif d.kind == "media":
                 extra = " · فيديو"
-            self._meta(f"{ltr(fmt_size(d.downloaded))} من {ltr(fmt_size(d.size))}{extra}", False)
+            elif d.kind == "torrent":
+                extra = f" · {ltr(str(d.peers))} أقران ({ltr(str(d.seeds))} مصدر)"
+            if d.kind == "torrent" and d.stage:
+                self._meta(d.stage, False)
+            else:
+                self._meta(f"{ltr(fmt_size(d.downloaded))} من {ltr(fmt_size(d.size))}{extra}", False)
             self.speed.setText(fmt_speed(d.speed) if running and d.speed else "")
             e = fmt_eta(d.eta)
             self.eta.setText(f"متبقي {e}" if e else "")

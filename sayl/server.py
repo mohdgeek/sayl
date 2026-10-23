@@ -155,7 +155,7 @@ def make_handler(manager, config, on_add=None, on_confirm=None):
                 hdrs = {k: str(v) for k, v in (data.get("headers") or {}).items()
                         if k.lower() in ALLOWED_HEADERS}
                 kind = str(data.get("kind") or "auto")
-                if kind not in ("auto", "http", "media"):
+                if kind not in ("auto", "http", "media", "torrent"):
                     raise ValueError("kind")
                 height = data.get("height")
                 height = int(height) if height else None

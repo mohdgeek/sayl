@@ -14,9 +14,11 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineE
 from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, category_of, ext_of
 from .config import Config
-from .dialogs import AddDialog, FileConfirmDialog, ProgressWindow, SettingsDialog, WelcomeDialog
+from .dialogs import (AddDialog, FileConfirmDialog, ProgressWindow, SettingsDialog,
+                      TorrentConfirmDialog, WelcomeDialog)
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
+from . import torrent
 from .media import is_media_url
 from .server import ApiServer, open_pairing, start_server
 from .widgets import (CAT_ICON, DownloadRow, ElidedLabel, FileTile, IconButton, NavButton,
@@ -39,8 +41,12 @@ class Bridge(QObject):
 
 def looks_downloadable(text):
     t = text.strip()
+    if torrent.is_magnet(t) and "\n" not in t:
+        return True
     if "\n" in t or " " in t or not t.lower().startswith(("http://", "https://")):
         return False
+    if torrent.is_torrent_url(t):
+        return True
     if is_media_url(t):
         return True
     path = t.split("?")[0].split("#")[0]
@@ -601,6 +607,17 @@ class MainWindow(QMainWindow):
 
     def open_confirm(self, url, headers, kind, preset):
         """طلب من الإضافة: نافذة التحميل وحدها (مثل IDM) دون إظهار الواجهة الرئيسية."""
+        if kind == "torrent" or torrent.is_torrent_url(url):     # magnet أو ملف .torrent
+            dlg = TorrentConfirmDialog(self.config, url, None)
+            self._front(dlg)
+            if dlg.exec():
+                v = dlg.values()
+                d = self._add(url, dest_dir=v["folder"], kind="torrent", force=v["start"],
+                              start=v["start"], headers=headers or None)
+                if d is not None and v["start"]:
+                    self._show_progress(d)
+                self.set_filter("all")
+            return
         if kind != "media":                      # ملف عادي: نافذة «معلومات الملف»
             dlg = FileConfirmDialog(self.config, url, headers, None)
             self._front(dlg)
@@ -761,10 +778,15 @@ class MainWindow(QMainWindow):
                                   QSystemTrayIcon.Information, 2500)
 
     def _urls_from(self, mime):
-        urls = [u.toString() for u in mime.urls() if u.scheme() in ("http", "https")]
+        urls = []
+        for u in mime.urls():
+            if u.scheme() in ("http", "https", "magnet"):
+                urls.append(u.toString(QUrl.FullyEncoded))
+            elif u.isLocalFile() and u.toLocalFile().lower().endswith(".torrent"):
+                urls.append(u.toLocalFile())
         if not urls and mime.hasText():
             urls = [t.strip() for t in mime.text().splitlines()
-                    if t.strip().lower().startswith(("http://", "https://"))]
+                    if t.strip().lower().startswith(("http://", "https://", "magnet:?"))]
         return urls
 
     def dragEnterEvent(self, e):
@@ -807,7 +829,10 @@ def main():
     os.makedirs(os.path.dirname(setup_tools.LOG_PATH), exist_ok=True)
     lock = QLockFile(os.path.join(os.path.dirname(setup_tools.LOG_PATH), "sayl.lock"))
     lock.setStaleLockTime(0)
+    cli_items = [a for a in sys.argv[1:] if torrent.is_torrent_url(a)]    # magnet أو .torrent من ويندوز
     if not lock.tryLock(100):
+        if cli_items and all(setup_tools.forward_to_running(config, a) for a in cli_items):
+            return
         QMessageBox.information(None, "سيل", "سيل يعمل بالفعل. ابحث عن أيقونته بجانب الساعة.")
         return
     try:
@@ -838,7 +863,10 @@ def main():
     except OSError as e:
         QMessageBox.warning(win, "سيل", f"تعذّر تشغيل الخادم المحلي: {e}\n"
                             "لن تعمل إضافة المتصفح.")
-    if "--minimized" not in sys.argv:
+    if cli_items:                              # فُتح بتورنت: تظهر نافذة التورنت وحدها
+        for i, a in enumerate(cli_items):
+            QTimer.singleShot(300 + 50 * i, lambda a=a: win.open_confirm(a, {}, "torrent", {}))
+    elif "--minimized" not in sys.argv:
         win.show()
         if not config["welcomed"]:
             QTimer.singleShot(400, win.show_welcome)

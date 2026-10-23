@@ -12,6 +12,8 @@ import urllib.parse
 from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, Download, RateLimiter, make_download)
+from . import torrent
+from .torrent import is_magnet
 from .media import MediaDownload, available as media_available, is_media_url
 from .schedule import in_window
 
@@ -27,6 +29,8 @@ class DuplicateError(Exception):
 
 
 def norm_url(url):
+    if torrent.is_magnet(url):
+        return "magnet:" + (torrent.magnet_hash(url) or url.strip().lower())
     try:
         p = urllib.parse.urlsplit(url.strip())
     except ValueError:
@@ -58,17 +62,27 @@ class DownloadManager:
     def add(self, url, headers=None, dest_dir=None, filename=None, start=True,
             kind="auto", height=None, audio_only=False, allow_duplicate=False,
             force=True, subs=None, subfolder=None, note=""):
-        url = url.strip()
-        if not url.lower().startswith(("http://", "https://")):
-            raise ValueError("الرابط يجب أن يبدأ بـ http:// أو https://")
+        url = url.strip().strip('"')
+        is_tor = kind == "torrent" or torrent.is_torrent_url(url)
+        if not is_tor and not url.lower().startswith(("http://", "https://")):
+            raise ValueError("الرابط يجب أن يبدأ بـ http:// أو https:// أو magnet:")
         if not allow_duplicate and self.config["warn_duplicates"]:
             dup = self.find_duplicate(url, filename)
             if dup:
                 raise DuplicateError(dup)
-        if kind == "auto":
+        if is_tor:
+            kind = "torrent"
+        elif kind == "auto":
             kind = "media" if is_media_url(url) else "http"
         dest = dest_dir or self.config["download_dir"]
-        if kind == "media":
+        if kind == "torrent":
+            if not torrent.available():
+                raise ValueError("دعم التورنت يحتاج الحزمة libtorrent (pip install libtorrent)")
+            if is_magnet(url) and not torrent.magnet_hash(url):
+                raise ValueError("رابط magnet غير صالح: ينقصه معرّف التورنت (xt=urn:btih:…)")
+            d = torrent.TorrentDownload(url, dest, headers=headers, limiter=self.limiter,
+                                        filename=filename)
+        elif kind == "media":
             if not media_available():
                 raise ValueError("ميزة الفيديو تحتاج حزمة yt-dlp (pip install yt-dlp)")
             if height is None and not audio_only and self.config["video_quality"]:
@@ -185,6 +199,7 @@ class DownloadManager:
         now = self.now_fn()
         is_open = self.schedule_open(now)
         self.limiter.set_rate(self.effective_limit_kb(now) * 1024)
+        torrent.apply_limit(self.limiter.rate)
         with self._lock:
             if not is_open:     # أغلقت النافذة: أوقف ما لم يُطلب يدويًا وأعده للطابور
                 for d in self.items.values():
@@ -289,7 +304,11 @@ class DownloadManager:
         for e in data:
             st = e.get("state", PAUSED)
             state = COMPLETED if st == COMPLETED else PAUSED
-            if e.get("kind") == "media":
+            if e.get("kind") == "torrent":
+                d = torrent.TorrentDownload(e["url"], e["dest_dir"], limiter=self.limiter,
+                                            filename=e.get("filename"), id=e["id"])
+                d.size = e.get("size")
+            elif e.get("kind") == "media":
                 d = MediaDownload(e["url"], e["dest_dir"], headers=e.get("headers"),
                                   limiter=self.limiter, height=e.get("height"),
                                   audio_only=e.get("audio_only", False),

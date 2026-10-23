@@ -92,6 +92,70 @@ def set_autostart(on):
     return True
 
 
+# ------------------------------------------------------------ ربط magnet و .torrent
+_CLS = r"Software\Classes"
+
+
+def _torrent_cmd():
+    return f'"{sys.executable}" "%1"'
+
+
+def torrent_assoc_enabled():
+    if not autostart_supported():
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _CLS + r"\magnet\shell\open\command") as k:
+            return sys.executable.lower() in str(winreg.QueryValueEx(k, "")[0]).lower()
+    except OSError:
+        return False
+
+
+def set_torrent_assoc(on):
+    """يجعل سيل يفتح روابط magnet وملفات .torrent (على مستوى المستخدم الحالي دون صلاحيات إدارة)."""
+    if not autostart_supported():
+        return False
+    import winreg
+    H = winreg.HKEY_CURRENT_USER
+    if not on:
+        for sub in (r"\magnet\shell\open\command", r"\magnet\shell\open", r"\magnet\shell", r"\magnet",
+                    r"\Sayl.Torrent\shell\open\command", r"\Sayl.Torrent\shell\open",
+                    r"\Sayl.Torrent\shell", r"\Sayl.Torrent"):
+            try:
+                winreg.DeleteKey(H, _CLS + sub)
+            except OSError:
+                pass
+        return True
+    cmd = _torrent_cmd()
+    with winreg.CreateKey(H, _CLS + r"\magnet") as k:
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:Magnet Link")
+        winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+    with winreg.CreateKey(H, _CLS + r"\magnet\shell\open\command") as k:
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)
+    with winreg.CreateKey(H, _CLS + r"\Sayl.Torrent") as k:
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "ملف تورنت")
+    with winreg.CreateKey(H, _CLS + r"\Sayl.Torrent\shell\open\command") as k:
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)
+    with winreg.CreateKey(H, _CLS + r"\.torrent") as k:
+        winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "Sayl.Torrent")
+    return True
+
+
+def forward_to_running(config, url):
+    """يمرّر رابط magnet/ملف تورنت إلى نسخة سيل العاملة. يعيد True عند النجاح."""
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{int(config['port'])}/add",
+            data=json.dumps({"url": url, "kind": "torrent", "confirm": True}).encode(),
+            headers={"Content-Type": "application/json", "X-Sayl-Token": config["token"]})
+        with urllib.request.urlopen(req, timeout=4) as r:
+            return bool(json.loads(r.read()).get("ok"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ------------------------------------------------------------ السجل
 LOG_PATH = os.path.join(APP_DIR, "sayl.log")
 

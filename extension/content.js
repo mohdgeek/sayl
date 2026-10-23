@@ -77,4 +77,13 @@
       hide();
     }, 2200);
   });
+
+  // روابط magnet: نرسلها إلى سيل بدل أن يسأل Chrome عن برنامج لفتحها
+  document.addEventListener("click", (e) => {
+    const a = e.target && e.target.closest && e.target.closest('a[href^="magnet:"]');
+    if (!a || e.defaultPrevented || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { chrome.runtime.sendMessage({ type: "send", url: a.href, kind: "torrent" }); } catch (err) { /* لا بأس */ }
+  }, true);
 })();
