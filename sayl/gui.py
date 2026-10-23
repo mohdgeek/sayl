@@ -3,22 +3,24 @@ import hashlib
 import os
 import sys
 import threading
+import urllib.parse
 
 from PySide6.QtCore import QLockFile, QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                                QPushButton, QStackedWidget, QSystemTrayIcon, QToolButton,
                                QVBoxLayout, QWidget)
 
 from . import icons, power, selfupdate, setup_tools, theme
-from .categories import CATEGORIES, EXT_TO_CAT, category_of, ext_of
+from .categories import CATEGORIES, EXT_TO_CAT, LABELS, category_of, ext_of
 from .config import Config
 from .dialogs import (AddDialog, FileConfirmDialog, ProgressWindow, SettingsDialog,
-                      TorrentConfirmDialog, WelcomeDialog)
+                      StatsDialog, TorrentConfirmDialog, WelcomeDialog)
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
 from . import torrent
+from .hotkey import GlobalHotkey
 from .media import is_media_url
 from .server import ApiServer, open_pairing, start_server
 from .widgets import (CAT_ICON, DownloadRow, ElidedLabel, FileTile, IconButton, NavButton,
@@ -34,6 +36,7 @@ class Bridge(QObject):
     added = Signal(str)          # من خيط الخادم إلى خيط الواجهة
     hashed = Signal(str, str)    # (اسم الملف، SHA-256)
     confirm = Signal(str, object, str, object)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
+    hotkey = Signal()            # من خيط الاختصار العام
     upd_found = Signal(object)   # إصدار أحدث متوفر (معلوماته)
     upd_prog = Signal(float)     # تقدّم تنزيل التحديث
     upd_done = Signal(object, str)  # (مسار الملف الجاهز أو None، رسالة خطأ)
@@ -230,7 +233,8 @@ class MainWindow(QMainWindow):
         mm.addSeparator()
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
         mm.addSeparator()
-        mm.addAction("تثبيت إضافة Chrome…", self.show_welcome)
+        mm.addAction("الإحصاءات…", lambda: StatsDialog(self.manager.stats, self).exec())
+        mm.addAction("تثبيت إضافة المتصفح…", self.show_welcome)
         mm.addSeparator()
         after = mm.addMenu("بعد انتهاء الطابور")
         self._after_acts = {}
@@ -383,13 +387,25 @@ class MainWindow(QMainWindow):
             return d.state == COMPLETED
         return category_of(d.filename or "", d.kind) == f
 
+    def _haystack(self, d):
+        """نص البحث: الاسم والرابط والوصف والموقع والفئة، وأسماء الملفات داخل التورنت."""
+        parts = [d.filename or "", d.url, getattr(d, "note", "") or "",
+                 LABELS.get(category_of(d.filename or "", d.kind), "")]
+        try:
+            parts.append(urllib.parse.urlsplit(d.url).hostname or "")
+        except ValueError:
+            pass
+        if d.kind == "torrent":
+            parts += [f["path"] for f in d.files()[:300]]
+        return " ".join(parts).lower()
+
     def _visible(self):
         q = self.search.text().strip().lower()
         out = []
         for d in self.manager.snapshot():
             if not self._match(d):
                 continue
-            if q and q not in ((d.filename or "") + " " + d.url).lower():
+            if q and q not in self._haystack(d):
                 continue
             out.append(d)
         return out
@@ -516,16 +532,53 @@ class MainWindow(QMainWindow):
         m.addAction("نسخ الرابط", lambda: self._copy(d.url))
         if d.state == COMPLETED:
             m.addAction("نسخ SHA-256 للملف", lambda: self._hash(d))
+            m.addAction("التحقق من بصمة الملف…", lambda: self._verify_hash(d))
+            m.addAction("إعادة تسمية…", lambda: self._rename(d))
         m.addSeparator()
         if d.state != COMPLETED:
             running = d.state in (DOWNLOADING, PROBING, QUEUED)
             m.addAction("إيقاف مؤقت" if running else "استئناف", lambda: self._toggle(id))
+            if d.kind == "http":
+                m.addAction("تحديث الرابط…", lambda: self._refresh_link(d))
         m.addAction("حذف", lambda: self._delete(id))
         m.exec(pos)
 
     def _copy(self, text):
         self._ignore_clip = text
         QApplication.clipboard().setText(text)
+
+    def _refresh_link(self, d):
+        text, ok = QInputDialog.getText(self, "تحديث الرابط",
+                                        "ألصق الرابط الجديد للملف نفسه (يكمل من حيث توقف إن تطابق الملف):")
+        if not ok or not text.strip():
+            return
+        try:
+            self.manager.refresh_url(d.id, text)
+        except ValueError as e:
+            QMessageBox.warning(self, "سيل", str(e))
+            return
+        self.show_banner("تم تحديث الرابط، سيكمل التحميل من حيث توقف", None, 6)
+
+    def _verify_hash(self, d):
+        text, ok = QInputDialog.getText(self, "التحقق من البصمة",
+                                        "ألصق البصمة المتوقعة (SHA-256 أو SHA-1 أو MD5):")
+        if not ok or not text.strip():
+            return
+        if not self.manager.set_expected_hash(d.id, text):
+            QMessageBox.warning(self, "سيل", "هذه ليست بصمة صالحة (يلزم نص ست عشري بطول 32 أو 40 أو 64 أو 128).")
+            return
+        self.show_banner(f"جارٍ التحقق من بصمة {d.filename}…", None, 6)
+
+    def _rename(self, d):
+        text, ok = QInputDialog.getText(self, "إعادة تسمية", "الاسم الجديد:", text=d.filename or "")
+        if not ok or not text.strip():
+            return
+        try:
+            self.manager.rename(d.id, text.strip())
+        except ValueError as e:
+            QMessageBox.warning(self, "سيل", str(e))
+            return
+        self.refresh(force=True)
 
     def _hash(self, d):
         path = self._path(d)
@@ -613,7 +666,7 @@ class MainWindow(QMainWindow):
             if dlg.exec():
                 v = dlg.values()
                 d = self._add(url, dest_dir=v["folder"], kind="torrent", force=v["start"],
-                              start=v["start"], headers=headers or None)
+                              start=v["start"], headers=headers or None, skip=v.get("skip"))
                 if d is not None and v["start"]:
                     self._show_progress(d)
                 self.set_filter("all")
@@ -623,9 +676,23 @@ class MainWindow(QMainWindow):
             self._front(dlg)
             if dlg.exec():
                 v = dlg.values()
+                stale = self.manager.find_stale(v["filename"]) if v["start"] else None
+                if stale is not None:
+                    r = QMessageBox.question(
+                        self, "تحميل متوقف بنفس الاسم",
+                        f"يوجد تحميل متوقف لـ «{stale.filename}» ({stale.progress * 100:.0f}% منه).\n"
+                        "هل تريد إكماله بهذا الرابط الجديد بدل البدء من الصفر؟")
+                    if r == QMessageBox.Yes:
+                        try:
+                            d = self.manager.refresh_url(stale.id, url, headers or None)
+                            self._show_progress(d)
+                            self.set_filter("all")
+                            return
+                        except ValueError:
+                            pass
                 d = self._add(url, dest_dir=v["folder"], filename=v["filename"] or None, kind="http",
                               force=v["start"], start=v["start"], headers=headers or None,
-                              subfolder=False, note=v["note"])
+                              subfolder=False, note=v["note"], expected_hash=v.get("hash", ""))
                 if d is not None and v["start"]:
                     self._show_progress(d)         # تبقى نافذة التقدّم ظاهرة أثناء التحميل
                 elif d is not None and self.tray.isVisible() and self.config["notify"]:
@@ -634,6 +701,26 @@ class MainWindow(QMainWindow):
                 self.set_filter("all")
             return
         self.open_add(urls=url, video=True, headers=headers, preset=preset, standalone=True)
+
+    def apply_hotkey(self):
+        hk = getattr(self, "hk", None)
+        if hk is None:
+            return
+        if not self.config["hotkey_enabled"]:
+            hk.stop()
+            return
+        if not hk.start(self.config["hotkey"]):
+            setup_tools.log(f"الاختصار العام لم يُسجَّل: {hk.error}")
+
+    def on_hotkey(self):
+        """الاختصار العام: يفتح نافذة الإضافة مع الرابط المنسوخ إن وُجد."""
+        text = QApplication.clipboard().text().strip()
+        urls = text if text and looks_downloadable(text.splitlines()[0]) else ""
+        if urls and "\n" not in urls:
+            kind = "torrent" if torrent.is_torrent_url(urls) else ("media" if is_media_url(urls) else "http")
+            self.open_confirm(urls, {}, kind, {})
+        else:
+            self.open_add(urls=text if text.lower().startswith(("http", "magnet:")) else "", standalone=True)
 
     def open_add(self, urls="", video=False, headers=None, preset=None, standalone=False):
         dlg = AddDialog(self.config, None if standalone else self, urls=urls, video=video, preset=preset)
@@ -666,6 +753,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             dlg.apply()
             self.manager.apply_settings()
+            self.apply_hotkey()
             QApplication.instance().setStyleSheet(theme.apply_config(self.config))
             self.retint()
             self.refresh(force=True)
@@ -854,6 +942,9 @@ def main():
     win = MainWindow(manager, config, bridge)
     bridge.added.connect(win.on_remote_add)
     bridge.confirm.connect(win.open_confirm)
+    bridge.hotkey.connect(win.on_hotkey)
+    win.hk = GlobalHotkey(lambda: bridge.hotkey.emit())
+    win.apply_hotkey()
     try:
         server, moved = start_server(manager, config, on_add=lambda d: bridge.added.emit(d.id),
                                    on_confirm=lambda u, h, k, o: bridge.confirm.emit(u, h, k, o))
@@ -875,6 +966,7 @@ def main():
     updater.auto_update_bg(config)
     code = app.exec()
     lock.unlock()
+    torrent.shutdown()
     sys.exit(code)
 
 

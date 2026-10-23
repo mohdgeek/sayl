@@ -46,7 +46,12 @@ DEFAULTS = {
     "after_all": "none",
     "update_repo": "mohdgeek/sayl",
     "auto_update_check": True,
-    "font_dir": "",             # مجلد يحوي ملفات خط ثمانية (otf/ttf)
+    "font_dir": "",
+    "rules": [],               # قواعد الحفظ التلقائي (انظر rules.py)
+    "clean_names": False,      # تنظيف أسماء الملفات تلقائيًا
+    "auto_retry": True,        # استئناف التحميل تلقائيًا بعد انقطاع الشبكة
+    "hotkey_enabled": True,    # اختصار عام لإضافة رابط من أي برنامج (ويندوز)
+    "hotkey": "Ctrl+Alt+S",             # مجلد يحوي ملفات خط ثمانية (otf/ttf)
     "category_dirs": {},        # مجلد محفوظ لكل فئة (من نافذة تأكيد التحميل)
     "welcomed": False,
     "app_exe": "",              # مسار البرنامج المُغلَّف، ليشغّله الجسر إن كان مغلقًا       # none | quit | shutdown

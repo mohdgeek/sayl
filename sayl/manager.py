@@ -1,4 +1,5 @@
 """مدير التحميلات: الطابور، الحد الأقصى للتحميلات المتزامنة، وحفظ القائمة."""
+import base64
 import json
 import os
 import threading
@@ -12,7 +13,8 @@ import urllib.parse
 from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, Download, RateLimiter, make_download)
-from . import torrent
+from . import engine, rules, torrent
+from .categories import category_of
 from .torrent import is_magnet
 from .media import MediaDownload, available as media_available, is_media_url
 from .schedule import in_window
@@ -38,6 +40,98 @@ def norm_url(url):
     return urllib.parse.urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path or "/", p.query, ""))
 
 HISTORY_LEN = 90
+RETRY_DELAYS = (5, 15, 30, 60, 120, 300)     # ثوانٍ بين محاولات الاستئناف التلقائي
+MAX_AUTO_RETRIES = 30
+
+
+def is_online(timeout=2.0):
+    """فحص سريع لعودة الاتصال بالإنترنت (اتصال TCP بخادم DNS عام)."""
+    import socket
+    for host in ("1.1.1.1", "8.8.8.8"):
+        try:
+            socket.create_connection((host, 443), timeout=timeout).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+class Stats:
+    """إحصاءات المكتمل: بايتات يومية وحسب الموقع، تُحفظ في stats.json."""
+
+    def __init__(self, path):
+        self.path = path
+        self.data = {"days": {}, "hosts": {}, "total": 0, "files": 0}
+        self._lock = threading.Lock()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                self.data.update({k: d[k] for k in self.data if k in d})
+        except (OSError, ValueError):
+            pass
+
+    def add(self, nbytes, host="", day=None):
+        day = day or dt.date.today().isoformat()
+        with self._lock:
+            d = self.data
+            d["days"][day] = d["days"].get(day, 0) + int(nbytes)
+            if host:
+                d["hosts"][host] = d["hosts"].get(host, 0) + int(nbytes)
+            d["total"] += int(nbytes)
+            d["files"] += 1
+            if len(d["days"]) > 400:                   # نحتفظ بآخر ~13 شهرًا
+                for k in sorted(d["days"])[:-400]:
+                    d["days"].pop(k, None)
+            if len(d["hosts"]) > 300:
+                for k, _ in sorted(d["hosts"].items(), key=lambda kv: kv[1])[:-300]:
+                    d["hosts"].pop(k, None)
+        self.save()
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with self._lock, open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
+
+    def summary(self, today=None):
+        today = today or dt.date.today()
+        with self._lock:
+            days = dict(self.data["days"])
+            hosts = dict(self.data["hosts"])
+            total, files = self.data["total"], self.data["files"]
+        last = [(today - dt.timedelta(days=i)).isoformat() for i in range(13, -1, -1)]
+        week = sum(days.get((today - dt.timedelta(days=i)).isoformat(), 0) for i in range(7))
+        month = sum(days.get((today - dt.timedelta(days=i)).isoformat(), 0) for i in range(30))
+        return {"today": days.get(today.isoformat(), 0), "week": week, "month": month,
+                "total": total, "files": files,
+                "series": [(d, days.get(d, 0)) for d in last],
+                "hosts": sorted(hosts.items(), key=lambda kv: kv[1], reverse=True)[:8]}
+_HASH_ALGOS = {32: "md5", 40: "sha1", 64: "sha256", 128: "sha512"}
+
+
+def normalize_hash(text):
+    """يقبل 'sha256:abc…' أو البصمة وحدها؛ يعيد '' إن لم تكن بصمة صالحة."""
+    t = str(text or "").strip().lower()
+    if ":" in t:
+        t = t.split(":", 1)[1].strip()
+    t = t.replace(" ", "")
+    return t if len(t) in _HASH_ALGOS and re.fullmatch(r"[0-9a-f]+", t) else ""
+
+
+def hash_file(path, algo, should_stop=lambda: False):
+    import hashlib
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            if should_stop():
+                return None
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class DownloadManager:
@@ -48,6 +142,8 @@ class DownloadManager:
         self._last_watch = 0.0
         self.state_path = state_path or os.path.join(APP_DIR, "downloads.json")
         self.limiter = RateLimiter(self.config["speed_limit_kb"] * 1024)
+        self.stats = Stats(os.path.join(os.path.dirname(self.state_path), "stats.json"))
+        self._online_at, self._online = 0.0, True
         self.items = {}
         self._order = []
         self._lock = threading.RLock()
@@ -61,7 +157,7 @@ class DownloadManager:
     # ------------------------------------------------------------ العمليات
     def add(self, url, headers=None, dest_dir=None, filename=None, start=True,
             kind="auto", height=None, audio_only=False, allow_duplicate=False,
-            force=True, subs=None, subfolder=None, note=""):
+            force=True, subs=None, subfolder=None, note="", skip=None, expected_hash=""):
         url = url.strip().strip('"')
         is_tor = kind == "torrent" or torrent.is_torrent_url(url)
         if not is_tor and not url.lower().startswith(("http://", "https://")):
@@ -74,7 +170,8 @@ class DownloadManager:
             kind = "torrent"
         elif kind == "auto":
             kind = "media" if is_media_url(url) else "http"
-        dest = dest_dir or self.config["download_dir"]
+        dest = (dest_dir or rules.folder_for(self.config, url, filename, category_of(filename or "", kind))
+                or self.config["download_dir"])
         if kind == "torrent":
             if not torrent.available():
                 raise ValueError("دعم التورنت يحتاج الحزمة libtorrent (pip install libtorrent)")
@@ -82,6 +179,7 @@ class DownloadManager:
                 raise ValueError("رابط magnet غير صالح: ينقصه معرّف التورنت (xt=urn:btih:…)")
             d = torrent.TorrentDownload(url, dest, headers=headers, limiter=self.limiter,
                                         filename=filename)
+            d.skip = sorted({int(i) for i in (skip or [])})
         elif kind == "media":
             if not media_available():
                 raise ValueError("ميزة الفيديو تحتاج حزمة yt-dlp (pip install yt-dlp)")
@@ -95,7 +193,7 @@ class DownloadManager:
         else:
             from . import mega
             if mega.is_folder(url):
-                raise ValueError("روابط مجلدات MEGA غير مدعومة بعد؛ افتح كل ملف على حدة وانسخ رابطه")
+                return self._add_mega_folder(url, dest, headers, start, force, note)
             if mega.is_mega(url) and not mega.parse(url):
                 raise ValueError("رابط MEGA ناقص: انسخه كاملًا مع الجزء الذي بعد علامة #")
             d = make_download(url, dest, headers=headers, connections=self.config["connections"],
@@ -103,6 +201,8 @@ class DownloadManager:
         d.subfolder = bool(self.config["subfolders"]) if subfolder is None else bool(subfolder)
         d.note = note or ""
         d.force = bool(force)
+        d.expected_hash = normalize_hash(expected_hash)
+        d.hash_state = None
         if not start:
             d.state = PAUSED
         with self._lock:
@@ -110,6 +210,41 @@ class DownloadManager:
             self._order.insert(0, d.id)       # الأحدث أولًا
         self.save()
         return d
+
+    def _add_mega_folder(self, url, dest, headers, start, force, note):
+        """مجلد MEGA عام: يُعدَّد محتواه وتُضاف كل ملفاته مع الحفاظ على هيكل المجلدات الفرعية."""
+        from . import mega
+        try:
+            info = mega.list_folder(url)
+        except (IOError, ValueError):
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"تعذّر قراءة مجلد MEGA: {e}") from e
+        parsed = mega.parse_folder(url)
+        fkey_b64 = base64.urlsafe_b64encode(parsed[1]).decode().rstrip("=")
+        first = None
+        with self._lock:
+            order = []
+            for f in info["files"]:
+                sub = os.path.dirname(f["path"])
+                d = make_download(mega.folder_file_url(info["fid"], fkey_b64, f["h"]),
+                                  os.path.join(dest, *sub.split("/")) if sub else dest,
+                                  headers=None, connections=1, limiter=self.limiter, filename=f["name"],
+                                  node={"fid": info["fid"], "h": f["h"], "key": f["key"].hex()})
+                d.size = f["size"] or None
+                d.subfolder = False
+                d.note = note or ""
+                d.force = bool(force)
+                if not start:
+                    d.state = PAUSED
+                self.items[d.id] = d
+                order.append(d.id)
+                first = first or d
+            self._order[0:0] = list(reversed(order))
+        self.events.append(f"مجلد MEGA «{info['name']}»: أُضيف {len(info['files'])} ملف"
+                           + (" (اقتُصر على أول 2000)" if info.get("truncated") else ""))
+        self.save()
+        return first
 
     def find_duplicate(self, url, filename=None):
         key = norm_url(url)
@@ -137,6 +272,7 @@ class DownloadManager:
         d = self.items.get(id)
         if d and d.state in (PAUSED, ERROR, CANCELED):
             d.force = True          # الاستئناف اليدوي يتجاوز نافذة الجدولة
+            d.retries, d.retry_at = 0, None
             d.state = QUEUED
             self.save()
 
@@ -200,6 +336,10 @@ class DownloadManager:
         is_open = self.schedule_open(now)
         self.limiter.set_rate(self.effective_limit_kb(now) * 1024)
         torrent.apply_limit(self.limiter.rate)
+        engine.CLEAN_NAMES = bool(self.config["clean_names"])
+        self._verify_pending()
+        self._count_completed()
+        self._auto_retry()
         with self._lock:
             if not is_open:     # أغلقت النافذة: أوقف ما لم يُطلب يدويًا وأعده للطابور
                 for d in self.items.values():
@@ -215,6 +355,142 @@ class DownloadManager:
                 if d and d.state == QUEUED and not d.active and (is_open or d.force):
                     d.start()
                     running += 1
+
+    def _count_completed(self):
+        for d in list(self.items.values()):
+            if d.state == COMPLETED and not getattr(d, "_counted", False):
+                d._counted = True
+                try:
+                    host = urllib.parse.urlsplit(d.url).hostname or ("torrent" if d.kind == "torrent" else "")
+                except ValueError:
+                    host = ""
+                if d.kind == "torrent":
+                    host = "BitTorrent"
+                nbytes = d.size or d.downloaded or 0
+                if nbytes:
+                    self.stats.add(nbytes, host)
+
+    def _check_online(self):
+        now = time.monotonic()
+        if now - self._online_at > 4:
+            self._online, self._online_at = is_online(), now
+        return self._online
+
+    def _auto_retry(self):
+        """يعيد تشغيل التحميلات التي فشلت بسبب الشبكة، بتأخير متزايد وبعد التأكد من عودة الاتصال."""
+        if not self.config["auto_retry"]:
+            return
+        now = time.time()
+        for d in list(self.items.values()):
+            if d.state != ERROR or not getattr(d, "net_error", False) or d.active:
+                if d.state == COMPLETED:
+                    d.retries = 0
+                continue
+            n = getattr(d, "retries", 0)
+            if n >= MAX_AUTO_RETRIES:
+                d.net_error = False
+                continue
+            if getattr(d, "retry_at", None) is None:
+                d.retry_at = now + RETRY_DELAYS[min(n, len(RETRY_DELAYS) - 1)]
+                continue
+            if now < d.retry_at:
+                continue
+            if not self._check_online():            # لا نستهلك محاولة والشبكة غير متاحة
+                d.retry_at = now + 5
+                continue
+            d.retries, d.retry_at = n + 1, None
+            d.force = True
+            d.state = QUEUED
+            self.events.append(f"إعادة محاولة تلقائية ({n + 1}): {d.filename or d.url[:50]}")
+
+    def refresh_url(self, id, new_url, headers=None):
+        """يستبدل رابط تحميل منتهٍ/متوقف برابط جديد للملف نفسه ويكمل من حيث توقف (إن تطابق الحجم)."""
+        d = self.items.get(id)
+        new_url = (new_url or "").strip()
+        if not d or d.kind != "http" or d.state == COMPLETED:
+            raise ValueError("لا يمكن تحديث رابط هذا العنصر")
+        if not new_url.lower().startswith(("http://", "https://")):
+            raise ValueError("الرابط الجديد يجب أن يبدأ بـ http:// أو https://")
+        d.pause()
+        d.wait(15)
+        d.url = d.final_url = new_url
+        if headers:
+            d.headers = dict(headers)
+        d.size = None                 # يُعاد فحص الخادم؛ يستأنف فقط إن طابق الحجم والـ ETag
+        d.error, d.net_error, d.retries, d.retry_at = "", False, 0, None
+        d.force = True
+        d.state = QUEUED
+        self.save()
+        return d
+
+    def find_stale(self, filename):
+        """تحميل متوقف/فاشل بنفس اسم الملف وفيه جزء منزَّل (لتحديث رابطه بدل البدء من الصفر)."""
+        if not filename:
+            return None
+        with self._lock:
+            for d in self.items.values():
+                if (d.kind == "http" and d.filename == filename and d.state in (ERROR, PAUSED)
+                        and not d.active and d.downloaded > 0):
+                    return d
+        return None
+
+    def _verify_pending(self):
+        """يتحقق من بصمة الملفات المكتملة التي طُلب التحقق منها (في خيط خلفي، دون تجميد الواجهة)."""
+        for d in list(self.items.values()):
+            exp = getattr(d, "expected_hash", "")
+            if exp and d.state == COMPLETED and getattr(d, "hash_state", None) is None:
+                d.hash_state = "checking"
+                threading.Thread(target=self._verify_one, args=(d, exp), daemon=True).start()
+
+    def _verify_one(self, d, exp):
+        path = os.path.join(d.folder, d.filename or "")
+        try:
+            if not os.path.isfile(path):
+                d.hash_state = "skip"
+                return
+            digest = hash_file(path, _HASH_ALGOS[len(exp)], lambda: self._stop.is_set())
+            if digest is None:
+                d.hash_state = None
+                return
+            d.hash_actual = digest
+            d.hash_state = "ok" if digest == exp else "bad"
+            self.events.append(("✓ بصمة الملف صحيحة: " if d.hash_state == "ok"
+                                else "⚠ بصمة الملف لا تطابق المتوقع (قد يكون الملف تالفًا أو معدَّلًا): ")
+                               + (d.filename or ""))
+        except OSError:
+            d.hash_state = "skip"
+        self.save()
+
+    def set_expected_hash(self, id, text):
+        """يعيّن بصمة متوقعة لعنصر مكتمل ويُعاد التحقق. يعيد False إن لم تكن البصمة صالحة."""
+        d = self.items.get(id)
+        h = normalize_hash(text)
+        if not d or not h:
+            return False
+        d.expected_hash, d.hash_state = h, None
+        self.save()
+        return True
+
+    def rename(self, id, new_name):
+        """يعيد تسمية ملف مكتمل على القرص ويحدّث القائمة. يرفع ValueError برسالة عربية عند الفشل."""
+        d = self.items.get(id)
+        if not d or d.state != COMPLETED:
+            raise ValueError("يمكن إعادة تسمية الملفات المكتملة فقط")
+        new = engine.sanitize_filename(new_name)
+        if not new or new == d.filename:
+            return
+        src = os.path.join(d.folder, d.filename)
+        dst = os.path.join(d.folder, new)
+        if not os.path.exists(src):
+            raise ValueError("الملف غير موجود في مكانه")
+        if os.path.exists(dst):
+            raise ValueError("يوجد ملف بهذا الاسم بالفعل")
+        try:
+            os.rename(src, dst)
+        except OSError as e:
+            raise ValueError(f"تعذّرت إعادة التسمية: {e.strerror or e}") from e
+        d.filename = new
+        self.save()
 
     def _scheduler(self):
         last_save = last_hist = 0.0
@@ -284,7 +560,14 @@ class DownloadManager:
         # يُستدعى من خيوط متعددة (المجدول، الواجهة، الخادم)، لذا تُسلسَل الكتابة كلها
         with self._save_lock:
             with self._lock:
-                data = [self.items[i].to_dict() for i in self._order if i in self.items]
+                data = []
+                for i in self._order:
+                    if i in self.items:
+                        it = self.items[i]
+                        e = it.to_dict()
+                        e["hash"] = getattr(it, "expected_hash", "")
+                        e["hash_state"] = getattr(it, "hash_state", None) if getattr(it, "hash_state", None) in ("ok", "bad") else None
+                        data.append(e)
             os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
             tmp = self.state_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -308,6 +591,7 @@ class DownloadManager:
                 d = torrent.TorrentDownload(e["url"], e["dest_dir"], limiter=self.limiter,
                                             filename=e.get("filename"), id=e["id"])
                 d.size = e.get("size")
+                d.skip = list(e.get("skip") or [])
             elif e.get("kind") == "media":
                 d = MediaDownload(e["url"], e["dest_dir"], headers=e.get("headers"),
                                   limiter=self.limiter, height=e.get("height"),
@@ -318,9 +602,12 @@ class DownloadManager:
             else:
                 d = make_download(e["url"], e["dest_dir"], headers=e.get("headers"),
                                   connections=e.get("connections", 8), limiter=self.limiter,
-                                  filename=e.get("filename"), id=e["id"])
+                                  filename=e.get("filename"), id=e["id"], node=e.get("node"))
                 d.size, d.resumable, d.etag = (e.get("size"), e.get("resumable", False),
                                                e.get("etag"))
+            d._counted = state == COMPLETED          # لا نعيد عدّ ما اكتمل في جلسات سابقة
+            d.expected_hash = e.get("hash", "")
+            d.hash_state = e.get("hash_state")
             d.subfolder = e.get("subfolder", False)
             d.note = e.get("note", "")
             d.final_dir = e.get("final_dir")

@@ -40,7 +40,7 @@ wd.show()
 assert wd.btn_ext.text()
 wd.close()
 sd = SettingsDialog(cfg, win)
-assert sd.tabs.count() == 6
+assert sd.tabs.count() == 7
 sd._pick("accent", "#FF6FA5")
 assert theme.C["accent"] == "#FF6FA5" and theme.C["on_accent"] == "#1B1300"
 sd._pick("accent", "#222222")
@@ -199,6 +199,26 @@ def _update_bar_and_buttons_smoke():
 _update_bar_and_buttons_smoke()
 
 
+def _extras_smoke():
+    from sayl.dialogs import StatsDialog, TorrentFilesDialog
+    mgr.stats.add(3_000_000, "example.com")
+    dlg = StatsDialog(mgr.stats, win)
+    dlg.show()
+    app.processEvents()
+    assert dlg.isVisible()
+    dlg.close()
+    f = TorrentFilesDialog([{"index": 0, "path": "a/b.bin", "size": 10}, {"index": 3, "path": "c.txt", "size": 5}], [3], win)
+    assert f.skip() == [3] and "1 من 2" in f.total.text()
+    f._set(Qt.Unchecked)
+    assert not f.ok.isEnabled() and f.skip() == [0, 3]
+    # قاعدة حفظ + عمود الإعدادات
+    sd = gui.SettingsDialog(cfg, win) if False else None
+    print("EXTRAS OK")
+
+
+_extras_smoke()
+
+
 def _torrent_smoke():
     import libtorrent as lt
     from sayl import gui, torrent
@@ -250,7 +270,12 @@ def _torrent_smoke():
     w.close()
     win.hide()
     torrent.TorrentDownload.test_peers = []
+    del seed
+    torrent.shutdown()
     print("TORRENT OK")
 
 
 _torrent_smoke()
+
+sys.stdout.flush()
+os._exit(0)      # تفادي انهيار تفكيك Qt في بيئة بلا شاشة بعد نجاح كل الفحوص

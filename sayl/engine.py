@@ -72,6 +72,23 @@ def filename_from_response(resp, url):
     return sanitize_filename(os.path.basename(path)) if os.path.basename(path) else "download"
 
 
+CLEAN_NAMES = False          # يضبطه المدير من الإعدادات
+
+
+def clean_name(name):
+    """ينظّف اسمًا مأخوذًا من الخادم: وسوم المواقع، الشرطات السفلية، النقاط الفاصلة (Win.11.Aio…)."""
+    base, ext = os.path.splitext(urllib.parse.unquote(name or ""))
+    if len(ext) > 8 or " " in ext:
+        base, ext = base + ext, ""
+    base = re.sub(r"[\[\(]\s*(?:www\.)?[\w-]+(?:\.[\w-]+)+\s*[\]\)]", " ", base)     # [www.site.com]
+    base = re.sub(r"^\s*(?:www\.)?[\w-]+(?:\.[\w-]+)*\.(?:com|net|org|info|me|tv|cc|io)\s*[-–—_]\s*", "", base, flags=re.I)
+    base = base.replace("_", " ").replace("+", " ")
+    if " " not in base.strip() and base.count(".") >= 3:
+        base = base.replace(".", " ")
+    base = re.sub(r"\s+", " ", base).strip(" -._")
+    return (base + ext) if base else (name or "download")
+
+
 def unique_path(path):
     if not os.path.exists(path):
         return path
@@ -127,6 +144,21 @@ class Segment:
         return [self.start, self.end, self.pos]
 
 
+_NET_HINTS = ("timed out", "timeout", "refused", "unreachable", "name or service", "getaddrinfo",
+              "nameresolution", "connection aborted", "reset by peer", "connection reset",
+              "remotedisconnected", "max retries", "10054", "10053", "10060", "10061", "10051",
+              "10065", "network is", "temporary failure", "no route to host", "connection error",
+              "incompleteread", "chunkedencodingerror", "broken pipe", "eof occurred")
+
+
+def is_network_error(e):
+    """هل الخطأ بسبب انقطاع الشبكة أو الخادم مؤقتًا (يستحق إعادة محاولة تلقائية)؟"""
+    low = str(e).lower()
+    if "certificate" in low or "http 4" in low:
+        return False
+    return any(h in low for h in _NET_HINTS)
+
+
 def friendly_error(e):
     """يحوّل أخطاء requests الطويلة إلى سبب مفهوم يُعرض في القائمة."""
     raw = str(e)
@@ -150,6 +182,8 @@ def friendly_error(e):
 
 class Download:
     kind = "http"
+    retries = 0            # محاولات الاستئناف التلقائي
+    retry_at = None
 
     def __init__(self, url, dest_dir, headers=None, connections=8, limiter=None,
                  filename=None, id=None):
@@ -171,6 +205,7 @@ class Download:
         self.created = time.time()
         self.single_bytes = 0          # تقدّم الوضع غير المقسّم
         self.note = ""                 # وصف اختياري من نافذة التأكيد
+        self.net_error = False         # آخر فشل كان بسبب الشبكة (للاستئناف التلقائي)
         self.subfolder = False         # حفظ الملف في مجلد فرعي حسب نوعه
         self.final_dir = None          # المجلد النهائي بعد الاكتمال
         self.force = True              # يبدأ حتى خارج نافذة الجدولة
@@ -298,6 +333,8 @@ class Download:
                 self.resumable = False
             if not self.filename:
                 self.filename = filename_from_response(r, self.url)
+                if CLEAN_NAMES:
+                    self.filename = sanitize_filename(clean_name(self.filename))
         finally:
             r.close()
             # اتصال الفحص يُترك نصف مقروء؛ بعض الخوادم تُعلّق الطلب التالي على نفس الاتصال
@@ -333,6 +370,7 @@ class Download:
         except Exception as e:  # noqa: BLE001
             if self._stop.is_set():
                 return
+            self.net_error = is_network_error(e)
             self.error = friendly_error(e)
             self.state = ERROR
             try:
@@ -604,9 +642,20 @@ class Download:
 class MegaDownload(Download):
     """ملف MEGA عام: اتصال واحد مع فك التشفير أثناء الكتابة (الرابط المؤقت يُجلب من جديد عند كل بدء)."""
 
+    def to_dict(self):
+        d = super().to_dict()
+        d["node"] = self.node
+        return d
+
+    node = None          # ملف داخل مجلد MEGA: {"fid", "h", "key" (hex)}
+
     def _refresh(self):
         from . import mega
-        info = mega.fetch_info(self.url, self._session)
+        if self.node:
+            info = mega.fetch_node_info(self.node["fid"], self.node["h"],
+                                        bytes.fromhex(self.node["key"]), self._session)
+        else:
+            info = mega.fetch_info(self.url, self._session)
         self.final_url = info["url"]
         self.size = info["size"] or self.size
         if not self.filename:
@@ -625,7 +674,10 @@ class MegaDownload(Download):
         from . import mega
         self.segments = []
         self.single_bytes = 0
-        _, aes_key, nonce = mega.parse(self.url)
+        if self.node:
+            aes_key, nonce = mega.keys_from_node(bytes.fromhex(self.node["key"]))
+        else:
+            _, aes_key, nonce = mega.parse(self.url)
         cipher = mega.ctr(aes_key, nonce)
         last_bytes, last_t = 0, time.monotonic()
         with self._session.get(self.final_url, headers=self._req_headers(), stream=True,
@@ -648,9 +700,13 @@ class MegaDownload(Download):
             raise IOError("اكتمل تنزيل MEGA ناقصًا؛ أعد المحاولة")
 
 
-def make_download(url, *args, **kw):
+def make_download(url, *args, node=None, **kw):
     """يختار صنف التنزيل المناسب للرابط (MEGA يحتاج فك تشفير)."""
     from . import mega
+    if node:
+        d = MegaDownload(url, *args, **kw)
+        d.node = node
+        return d
     if mega.is_mega(url) and mega.parse(url):
         return MegaDownload(url, *args, **kw)
     return Download(url, *args, **kw)

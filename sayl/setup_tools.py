@@ -57,6 +57,63 @@ def export_extension(config, dest=None):
     return dest
 
 
+# ------------------------------------------------------------ Firefox
+FIREFOX_ID = "sayl@mohdgeek.github.io"
+_FF_SHIM = "if (typeof browser !== 'undefined') { globalThis.chrome = browser; }\n"
+
+
+def firefox_manifest(manifest):
+    """يحوّل manifest الإضافة (Chrome) إلى صيغة Firefox: صفحة خلفية بدل service worker + معرّف ثابت."""
+    m = json.loads(json.dumps(manifest))
+    m.pop("key", None)
+    m["background"] = {"scripts": ["shim.js", "lib.js", "background.js"]}
+    for cs in m.get("content_scripts", []):
+        cs["js"] = ["shim.js"] + [j for j in cs.get("js", []) if j != "shim.js"]
+    m["browser_specific_settings"] = {"gecko": {"id": FIREFOX_ID, "strict_min_version": "115.0"}}
+    return m
+
+
+def export_firefox(config, dest=None):
+    """يجهّز مجلد وحزمة .xpi لـ Firefox. يعيد (المجلد، مسار xpi)."""
+    import zipfile
+    src = resource_path("extension")
+    if not os.path.isfile(os.path.join(src, "manifest.json")):
+        raise FileNotFoundError("ملفات الإضافة غير موجودة داخل البرنامج")
+    dest = dest or (default_extension_dir() + "-Firefox")
+    if os.path.isdir(dest):
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+    with open(os.path.join(src, "manifest.json"), encoding="utf-8") as f:
+        mf = firefox_manifest(json.load(f))
+    with open(os.path.join(dest, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(mf, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(dest, "shim.js"), "w", encoding="utf-8") as f:
+        f.write(_FF_SHIM)
+    with open(os.path.join(dest, "pair.json"), "w", encoding="utf-8") as f:
+        json.dump({"port": int(config["port"]), "token": config["token"], "version": _app_version()}, f)
+    xpi = dest + ".xpi"
+    with zipfile.ZipFile(xpi, "w", zipfile.ZIP_DEFLATED) as z:
+        for root, _, files in os.walk(dest):
+            for n in files:
+                full = os.path.join(root, n)
+                z.write(full, os.path.relpath(full, dest).replace(os.sep, "/"))
+    return dest, xpi
+
+
+def find_firefox():
+    cands = [os.path.join(os.environ.get(v, ""), "Mozilla Firefox", "firefox.exe")
+             for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+    return next((p for p in cands if os.path.isfile(p)), None) or shutil.which("firefox")
+
+
+def open_firefox_debug():
+    import subprocess
+    exe = find_firefox()
+    if not exe:
+        raise FileNotFoundError("Firefox")
+    subprocess.Popen([exe, "about:debugging#/runtime/this-firefox"])
+
+
 # ------------------------------------------------------------ التشغيل مع ويندوز
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -283,6 +340,12 @@ def register_native_host(config=None, extra_dirs=None, registry=True):
     with open(main_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
     written = [main_path]
+    ff_manifest = dict(manifest)                    # Firefox يستعمل allowed_extensions بدل allowed_origins
+    ff_manifest.pop("allowed_origins", None)
+    ff_manifest["allowed_extensions"] = [FIREFOX_ID]
+    ff_path = os.path.join(APP_DIR, f"{HOST_NAME}.firefox.json")
+    with open(ff_path, "w", encoding="utf-8") as f:
+        json.dump(ff_manifest, f, ensure_ascii=False, indent=2)
     if sys.platform.startswith("win"):
         if registry:
             import winreg
@@ -290,11 +353,21 @@ def register_native_host(config=None, extra_dirs=None, registry=True):
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + "\\" + HOST_NAME) as k:
                     winreg.SetValueEx(k, "", 0, winreg.REG_SZ, main_path)
                 written.append("HKCU\\" + base)
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
+                                  r"Software\Mozilla\NativeMessagingHosts\\" + HOST_NAME) as k:
+                winreg.SetValueEx(k, "", 0, winreg.REG_SZ, ff_path)
+            written.append("HKCU\\Software\\Mozilla\\NativeMessagingHosts")
     else:
         for d in (extra_dirs or []) + (_nm_dirs_posix() if registry else []):
             os.makedirs(d, exist_ok=True)
             p = os.path.join(d, f"{HOST_NAME}.json")
             shutil.copyfile(main_path, p)
+            written.append(p)
+        if registry:
+            ffd = os.path.join(os.path.expanduser("~"), ".mozilla", "native-messaging-hosts")
+            os.makedirs(ffd, exist_ok=True)
+            p = os.path.join(ffd, f"{HOST_NAME}.json")
+            shutil.copyfile(ff_path, p)
             written.append(p)
     if config is not None and getattr(sys, "frozen", False):
         config["app_exe"] = sys.executable
@@ -336,6 +409,13 @@ def native_status():
             except OSError:
                 ok = False
             out.append((f"مسجّل في {label}" if ok else f"غير مسجّل في {label}", ok))
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Mozilla\NativeMessagingHosts\\" + HOST_NAME) as k:
+                ok = bool(winreg.QueryValueEx(k, "")[0])
+        except OSError:
+            ok = False
+        out.append(("مسجّل في Firefox" if ok else "غير مسجّل في Firefox", ok))
     return out
 
 

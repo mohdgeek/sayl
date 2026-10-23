@@ -1,6 +1,7 @@
 """نوافذ الإضافة والإعدادات."""
 import os
 import re
+import sys
 import threading
 import urllib.parse
 
@@ -9,8 +10,8 @@ from PySide6.QtCore import QTime
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
                                QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, 
-                               QVBoxLayout, QWidget)
+                               QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
+                               QTabWidget, QVBoxLayout, QWidget)
 
 from . import __version__, media, selfupdate, setup_tools, theme, updater
 from .categories import CATEGORIES, COLORS, LABELS, category_of
@@ -254,6 +255,9 @@ class ProgressWindow(QDialog):
         self.b_folder.setObjectName("Ghost")
         self.b_cancel = QPushButton("إلغاء التحميل")
         self.b_cancel.setObjectName("Ghost")
+        self.b_files = QPushButton("الملفات…")
+        self.b_files.setObjectName("Ghost")
+        self.b_files.clicked.connect(self._pick_files)
         self.b_main = QPushButton("فتح سيل")
         self.b_main.setObjectName("Ghost")
         self.b_hide = QPushButton("إغلاق النافذة")
@@ -267,7 +271,7 @@ class ProgressWindow(QDialog):
         self.b_main.setVisible(bool(on_open_main))
         self.b_hide.clicked.connect(self.close)
         btns = QHBoxLayout()
-        for b in (self.b_pause, self.b_open, self.b_folder, self.b_cancel):
+        for b in (self.b_pause, self.b_open, self.b_folder, self.b_files, self.b_cancel):
             btns.addWidget(b)
         btns.addStretch(1)
         btns.addWidget(self.b_main)
@@ -337,6 +341,7 @@ class ProgressWindow(QDialog):
         self.b_pause.setText("إيقاف مؤقت" if active else ("إعادة المحاولة" if st == S["ERROR"] else "استئناف"))
         self.b_open.setVisible(done)
         self.b_cancel.setVisible(not done)
+        self.b_files.setVisible(getattr(d, "kind", "") == "torrent" and bool(d.files()) and not done)
 
     def _toggle(self):
         if self.d.state in (self._S["DOWNLOADING"], self._S["PROBING"], self._S["QUEUED"]):
@@ -344,6 +349,15 @@ class ProgressWindow(QDialog):
         else:
             self.manager.resume(self.d.id)
         self.refresh()
+
+    def _pick_files(self):
+        files = self.d.files()
+        if not files:
+            return
+        dlg = TorrentFilesDialog(files, self.d.skip, self)
+        if dlg.exec():
+            self.d.set_skip(dlg.skip())
+            self.manager.save()
 
     def _apply_conn(self):
         self.d.connections = self.spin_conn.value()
@@ -420,6 +434,10 @@ class FileConfirmDialog(QDialog):
 
         self.note = QLineEdit()
         self.note.setPlaceholderText("اختياري")
+        self.hash = QLineEdit()
+        self.hash.setPlaceholderText("اختياري: ألصق بصمة SHA-256 (أو MD5/SHA-1) للتحقق بعد الاكتمال")
+        self.hash.setLayoutDirection(Qt.LeftToRight)
+        self._url_text = url
 
         self.badge = QLabel()
         self.badge.setAlignment(Qt.AlignCenter)
@@ -445,6 +463,7 @@ class FileConfirmDialog(QDialog):
         form.addRow(self.remember)
         form.addRow("", self.remember_path)
         form.addRow("الوصف", self.note)
+        form.addRow("البصمة", self.hash)
 
         self.btn_later = QPushButton("تحميل لاحقًا")
         self.btn_later.setObjectName("Ghost")
@@ -486,6 +505,10 @@ class FileConfirmDialog(QDialog):
         return self.cat.currentData()
 
     def _folder_for(self, key):
+        from . import rules
+        ruled = rules.folder_for(self.config, self._url_text, self._name, key)
+        if ruled:
+            return ruled
         saved = (self.config["category_dirs"] or {}).get(key)
         if saved:
             return saved
@@ -537,7 +560,175 @@ class FileConfirmDialog(QDialog):
         full = self.path.text().strip()
         return {"folder": os.path.dirname(full) or self.config["download_dir"],
                 "filename": os.path.basename(full), "start": self.start,
-                "note": self.note.text().strip(), "category": self._key()}
+                "note": self.note.text().strip(), "category": self._key(),
+                "hash": self.hash.text().strip()}
+
+
+class _Bars(QWidget):
+    """رسم أعمدة بسيط لآخر 14 يومًا."""
+
+    def __init__(self, series):
+        super().__init__()
+        self.series = series
+        self.setMinimumHeight(150)
+
+    def paintEvent(self, _e):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainter
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        n = len(self.series) or 1
+        mx = max([v for _, v in self.series] + [1])
+        w, h = self.width(), self.height() - 22
+        gap = 6
+        bw = max(4.0, (w - gap * (n - 1)) / n)
+        col = QColor(theme.C.get("accent", "#FFB020"))
+        muted = QColor(col)
+        muted.setAlpha(60)
+        for i, (day, v) in enumerate(self.series):
+            bh = (h - 6) * (v / mx) if v else 2
+            x = i * (bw + gap)
+            p.setBrush(col if v else muted)
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(QRectF(x, h - bh, bw, bh), 4, 4)
+            if i % 2 == 0 or n < 8:
+                p.setPen(QColor(150, 150, 160))
+                p.drawText(QRectF(x - 6, h + 4, bw + 12, 16), Qt.AlignCenter, day[8:])
+        p.end()
+
+
+class StatsDialog(QDialog):
+    """إحصاءات التحميل: اليوم والأسبوع والشهر، ورسم آخر 14 يومًا، وأكثر المواقع."""
+
+    def __init__(self, stats, parent=None):
+        super().__init__(parent)
+        s = stats.summary()
+        self.setWindowTitle("الإحصاءات")
+        self.setMinimumWidth(560)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setSpacing(12)
+        t = QLabel("إحصاءات التحميل")
+        t.setObjectName("PageTitle")
+        lay.addWidget(t)
+        row = QHBoxLayout()
+        for label, val in (("اليوم", s["today"]), ("آخر 7 أيام", s["week"]), ("آخر 30 يومًا", s["month"]),
+                           ("الإجمالي", s["total"])):
+            card = QFrame()
+            card.setObjectName("Card")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 10, 12, 10)
+            a = QLabel(label)
+            a.setObjectName("Sub")
+            b = QLabel(_fmt_size(val) if val else "0")
+            b.setStyleSheet("font-size:18px; font-weight:700;")
+            b.setLayoutDirection(Qt.LeftToRight)
+            cl.addWidget(a)
+            cl.addWidget(b)
+            row.addWidget(card)
+        lay.addLayout(row)
+        lay.addWidget(_title(f"آخر 14 يومًا  ·  {s['files']} ملفًا مكتملًا منذ البداية"))
+        lay.addWidget(_Bars(s["series"]))
+        lay.addWidget(_title("أكثر المواقع تحميلًا"))
+        if s["hosts"]:
+            top = max(v for _, v in s["hosts"]) or 1
+            for host, v in s["hosts"]:
+                r = QHBoxLayout()
+                name = QLabel(host)
+                name.setLayoutDirection(Qt.LeftToRight)
+                name.setMinimumWidth(190)
+                bar = QProgressBar()
+                bar.setRange(0, 1000)
+                bar.setValue(int(1000 * v / top))
+                bar.setTextVisible(False)
+                bar.setFixedHeight(10)
+                size = QLabel(_fmt_size(v))
+                size.setLayoutDirection(Qt.LeftToRight)
+                size.setMinimumWidth(80)
+                r.addWidget(name)
+                r.addWidget(bar, 1)
+                r.addWidget(size)
+                lay.addLayout(r)
+        else:
+            lay.addWidget(_title("لا توجد بيانات بعد: ستظهر هنا بعد اكتمال أول تحميل."))
+        close = QPushButton("إغلاق")
+        close.setObjectName("Ghost")
+        close.clicked.connect(self.accept)
+        bl = QHBoxLayout()
+        bl.addStretch(1)
+        bl.addWidget(close)
+        lay.addLayout(bl)
+
+
+class TorrentFilesDialog(QDialog):
+    """اختيار ملفات معيّنة من داخل التورنت (مربعات اختيار مع الأحجام)."""
+
+    def __init__(self, files, skip=(), parent=None):
+        super().__init__(parent)
+        self.files = files
+        self.setWindowTitle("اختيار ملفات التورنت")
+        self.setMinimumSize(560, 460)
+        self.lst = QListWidget()
+        self.lst.setLayoutDirection(Qt.LeftToRight)
+        skip = set(skip)
+        for f in files:
+            it = QListWidgetItem(f"{f['path']}    ({_fmt_size(f['size'])})")
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Unchecked if f["index"] in skip else Qt.Checked)
+            self.lst.addItem(it)
+        self.lst.itemChanged.connect(lambda *_: self._sum())
+        all_b = QPushButton("تحديد الكل")
+        none_b = QPushButton("إلغاء التحديد")
+        for b, st in ((all_b, Qt.Checked), (none_b, Qt.Unchecked)):
+            b.setObjectName("Ghost")
+            b.clicked.connect(lambda _=False, s=st: self._set(s))
+        self.total = QLabel("")
+        self.total.setObjectName("Sub")
+        self.ok = QPushButton("تأكيد")
+        self.ok.setObjectName("Primary")
+        self.ok.setDefault(True)
+        cancel = QPushButton("إلغاء")
+        cancel.setObjectName("Ghost")
+        self.ok.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+        top = QHBoxLayout()
+        top.addWidget(all_b)
+        top.addWidget(none_b)
+        top.addWidget(self.total, 1)
+        bot = QHBoxLayout()
+        bot.addStretch(1)
+        bot.addWidget(cancel)
+        bot.addWidget(self.ok)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setSpacing(10)
+        t = QLabel("ملفات التورنت")
+        t.setObjectName("PageTitle")
+        lay.addWidget(t)
+        lay.addLayout(top)
+        lay.addWidget(self.lst, 1)
+        lay.addLayout(bot)
+        self._sum()
+
+    def _set(self, st):
+        self.lst.blockSignals(True)
+        for i in range(self.lst.count()):
+            self.lst.item(i).setCheckState(st)
+        self.lst.blockSignals(False)
+        self._sum()
+
+    def _sum(self):
+        n = size = 0
+        for i, f in enumerate(self.files):
+            if self.lst.item(i).checkState() == Qt.Checked:
+                n += 1
+                size += f["size"]
+        self.total.setText(f"{n} من {len(self.files)} ملف · {_fmt_size(size)}")
+        self.ok.setEnabled(n > 0)
+
+    def skip(self):
+        return [f["index"] for i, f in enumerate(self.files)
+                if self.lst.item(i).checkState() != Qt.Checked]
 
 
 class TorrentConfirmDialog(QDialog):
@@ -560,12 +751,25 @@ class TorrentConfirmDialog(QDialog):
         self.name.setObjectName("RowName")
         self.name.setStyleSheet("font-size:15px; font-weight:700;")
         self.name.setWordWrap(True)
-        self.folder = QLineEdit(config["download_dir"])
+        from . import rules as _rules
+        self.folder = QLineEdit(_rules.folder_for(config, source, name, "torrent") or config["download_dir"])
         self.folder.setLayoutDirection(Qt.LeftToRight)
         browse = QPushButton("استعراض")
         browse.setObjectName("Ghost")
         browse.clicked.connect(self._browse)
-        hint = QLabel("سيُنزَّل التورنت كاملًا إلى هذا المجلد، ويتوقف الرفع عند الاكتمال.")
+        self.skip = []
+        self._files = None
+        local = source if not _tor.is_magnet(source) and os.path.isfile(source) else ""
+        if local:
+            self._files = _tor.read_files(local)
+        self.b_files = QPushButton("اختيار الملفات…")
+        self.b_files.setObjectName("Ghost")
+        self.b_files.setVisible(bool(self._files))
+        self.b_files.clicked.connect(self._pick_files)
+        hint = QLabel("سيُنزَّل التورنت كاملًا إلى هذا المجلد (أو الملفات التي تختارها)، ويتوقف الرفع عند الاكتمال."
+                      if self._files else
+                      "سيُنزَّل التورنت إلى هذا المجلد، ويتوقف الرفع عند الاكتمال. "
+                      "يمكنك اختيار ملفات معيّنة من نافذة التقدّم بعد جلب البيانات.")
         hint.setObjectName("Sub")
         hint.setWordWrap(True)
         later = QPushButton("تحميل لاحقًا")
@@ -597,8 +801,16 @@ class TorrentConfirmDialog(QDialog):
         lay.addWidget(self.src)
         lay.addWidget(_title("حفظ في"))
         lay.addLayout(frow)
+        lay.addWidget(self.b_files, 0, Qt.AlignLeft)
         lay.addWidget(hint)
         lay.addLayout(btns)
+
+    def _pick_files(self):
+        dlg = TorrentFilesDialog(self._files, self.skip, self)
+        if dlg.exec():
+            self.skip = dlg.skip()
+            n = len(self._files) - len(self.skip)
+            self.b_files.setText(f"الملفات المختارة: {n} من {len(self._files)}")
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "اختر مجلد الحفظ", self.folder.text())
@@ -610,7 +822,8 @@ class TorrentConfirmDialog(QDialog):
         self.accept()
 
     def values(self):
-        return {"folder": self.folder.text().strip() or self.config["download_dir"], "start": self.start}
+        return {"folder": self.folder.text().strip() or self.config["download_dir"], "start": self.start,
+                "skip": self.skip}
 
 
 def _fmt_dur(sec):
@@ -723,6 +936,8 @@ class AddDialog(QDialog):
 
         self.folder = QLineEdit(config["download_dir"])
         self.folder.setLayoutDirection(Qt.LeftToRight)
+        self._folder_edited = False
+        self.folder.textEdited.connect(lambda *_: setattr(self, "_folder_edited", True))
         browse = QPushButton("استعراض")
         browse.setObjectName("Ghost")
         browse.clicked.connect(self._browse)
@@ -926,6 +1141,7 @@ class AddDialog(QDialog):
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "اختر مجلد الحفظ", self.folder.text())
         if d:
+            self._folder_edited = True
             self.folder.setText(d)
 
     def values(self):
@@ -933,7 +1149,8 @@ class AddDialog(QDialog):
         if self._entries:
             urls = [e["url"] for e in self._checked_entries()]
         langs = [x.strip() for x in str(self.config["sub_langs"]).split(",") if x.strip()]
-        return {"urls": urls, "folder": self.folder.text().strip(),
+        # إن لم يغيّر المستخدم المجلد نترك الاختيار للقواعد التلقائية ثم المجلد الافتراضي
+        return {"urls": urls, "folder": self.folder.text().strip() if self._folder_edited else "",
                 "subs": langs if (self._video and self.subs.isChecked()) else [],
                 "later": self.later.isChecked(), "playlist": bool(self._entries),
                 "kind": "media" if self._video else "http",
@@ -1029,6 +1246,7 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._general(), "عام")
+        tabs.addTab(self._rules_tab(), "القواعد")
         tabs.addTab(self._schedule(), "الجدولة")
         tabs.addTab(self._video(), "الفيديو")
         tabs.addTab(self._look(), "المظهر")
@@ -1055,6 +1273,90 @@ class SettingsDialog(QDialog):
         lay.addWidget(t)
         lay.addWidget(tabs)
         lay.addLayout(btns)
+
+    # ------------------------------------------------------------ القواعد
+    def _rules_tab(self):
+        from . import rules as _rules
+        from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
+        c = self.config
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(6, 16, 6, 6)
+        lay.setSpacing(10)
+        intro = QLabel("احفظ الملفات تلقائيًا في مجلدات حسب الامتداد أو الموقع أو الفئة. "
+                       "تُجرَّب القواعد من الأعلى للأسفل وأول قاعدة مطابقة تُطبَّق. "
+                       "القيمة: امتدادات مفصولة بفواصل (pdf, docx) أو اسم موقع (example.com) أو مفتاح فئة "
+                       "(video, audio, docs, archive, apps, images, torrent).")
+        intro.setWordWrap(True)
+        intro.setObjectName("Sub")
+        self.rules_tbl = QTableWidget(0, 3)
+        self.rules_tbl.setHorizontalHeaderLabels(["النوع", "القيمة", "المجلد"])
+        self.rules_tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.rules_tbl.setMinimumHeight(180)
+        self.rules_tbl.setLayoutDirection(Qt.LeftToRight)
+        for r in c["rules"] or []:
+            self._add_rule_row(r.get("type", "ext"), r.get("value", ""), r.get("dir", ""))
+        add = QPushButton("إضافة قاعدة")
+        add.setObjectName("Ghost")
+        add.clicked.connect(lambda: self._add_rule_row("ext", "", ""))
+        rm = QPushButton("حذف المحدّدة")
+        rm.setObjectName("Ghost")
+        rm.clicked.connect(lambda: [self.rules_tbl.removeRow(i) for i in
+                                    sorted({x.row() for x in self.rules_tbl.selectedIndexes()}, reverse=True)])
+        pick = QPushButton("اختيار مجلد للمحدّدة…")
+        pick.setObjectName("Ghost")
+        pick.clicked.connect(self._pick_rule_dir)
+        row = QHBoxLayout()
+        row.addWidget(add)
+        row.addWidget(rm)
+        row.addWidget(pick)
+        row.addStretch(1)
+        self.clean = QCheckBox("تنظيف أسماء الملفات تلقائيًا (إزالة وسوم المواقع والشرطات السفلية والنقاط)")
+        self.clean.setChecked(bool(c["clean_names"]))
+        self.retry = QCheckBox("استئناف التحميل تلقائيًا بعد انقطاع الشبكة")
+        self.retry.setChecked(bool(c["auto_retry"]))
+        lay.addWidget(intro)
+        lay.addWidget(self.rules_tbl)
+        lay.addLayout(row)
+        lay.addSpacing(6)
+        lay.addWidget(self.clean)
+        lay.addWidget(self.retry)
+        lay.addStretch(1)
+        return box
+
+    def _add_rule_row(self, typ, value, folder):
+        from . import rules as _rules
+        from PySide6.QtWidgets import QTableWidgetItem
+        t = self.rules_tbl
+        i = t.rowCount()
+        t.insertRow(i)
+        combo = QComboBox()
+        for k, label in _rules.TYPES:
+            combo.addItem(label, k)
+        combo.setCurrentIndex(max(0, combo.findData(typ)))
+        t.setCellWidget(i, 0, combo)
+        t.setItem(i, 1, QTableWidgetItem(value))
+        t.setItem(i, 2, QTableWidgetItem(folder))
+
+    def _pick_rule_dir(self):
+        from PySide6.QtWidgets import QTableWidgetItem
+        rows = sorted({x.row() for x in self.rules_tbl.selectedIndexes()})
+        if not rows:
+            return
+        d = QFileDialog.getExistingDirectory(self, "اختر مجلدًا")
+        if d:
+            for r in rows:
+                self.rules_tbl.setItem(r, 2, QTableWidgetItem(d))
+
+    def _collect_rules(self):
+        out = []
+        for i in range(self.rules_tbl.rowCount()):
+            it_v, it_d = self.rules_tbl.item(i, 1), self.rules_tbl.item(i, 2)
+            value = (it_v.text() if it_v else "").strip()
+            folder = (it_d.text() if it_d else "").strip()
+            if value and folder:
+                out.append({"type": self.rules_tbl.cellWidget(i, 0).currentData(), "value": value, "dir": folder})
+        return out
 
     # ------------------------------------------------------------ عام
     def _general(self):
@@ -1118,6 +1420,19 @@ class SettingsDialog(QDialog):
         f.addRow("", self.clip)
         f.addRow("", self.notify)
         f.addRow("", self.autostart)
+        self.hk_on = QCheckBox("اختصار عام لإضافة رابط من أي برنامج")
+        self.hk_on.setChecked(bool(c["hotkey_enabled"]))
+        self.hk_key = QLineEdit(str(c["hotkey"]))
+        self.hk_key.setMaximumWidth(150)
+        self.hk_key.setLayoutDirection(Qt.LeftToRight)
+        self.hk_key.setPlaceholderText("Ctrl+Alt+S")
+        hk_row = QHBoxLayout()
+        hk_row.addWidget(self.hk_on)
+        hk_row.addWidget(self.hk_key)
+        hk_row.addStretch(1)
+        self.hk_on.setVisible(setup_tools.autostart_supported() or sys.platform.startswith("win"))
+        self.hk_key.setVisible(self.hk_on.isVisible())
+        f.addRow("", hk_row)
         self.tor_assoc = QCheckBox("فتح روابط magnet وملفات .torrent بسيل (عند الضغط عليها خارج المتصفح)")
         self.tor_assoc.setChecked(setup_tools.torrent_assoc_enabled())
         self.tor_assoc.setVisible(setup_tools.autostart_supported())
@@ -1270,9 +1585,15 @@ class SettingsDialog(QDialog):
         lay.addLayout(r2)
         lay.addWidget(self.diag)
         lay.addStretch(1)
-        note = QLabel("متصفح Firefox غير مدعوم حاليًا.")
-        note.setObjectName("Sub")
-        lay.addWidget(note)
+        ff_btn = QPushButton("تجهيز إضافة Firefox")
+        ff_btn.setObjectName("Ghost")
+        ff_btn.clicked.connect(self._install_firefox)
+        edge_note = QLabel("Edge وBrave: اضغط «تثبيت الإضافة» أمام اسم المتصفح أعلاه "
+                           "(نفس إضافة Chrome، وتُحمَّل من صفحة الإضافات بوضع المطوّر).")
+        edge_note.setObjectName("Sub")
+        edge_note.setWordWrap(True)
+        lay.addWidget(edge_note)
+        lay.addWidget(ff_btn, 0, Qt.AlignLeft)
         self._diag_done.connect(self._on_diag)
         self._ext_timer = QTimer(self)
         self._ext_timer.timeout.connect(self._refresh_ext_state)
@@ -1343,6 +1664,25 @@ class SettingsDialog(QDialog):
         self.ext_msg.setText(
             f"تم تجهيز الإضافة وفتح {browser['name']}. في صفحة الإضافات: فعّل «وضع المطوّر» ثم "
             f"«تحميل إضافة غير مُحزّمة» واختر المجلد:\n{path}")
+
+    def _install_firefox(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        try:
+            folder, xpi = setup_tools.export_firefox(self.config)
+            setup_tools.register_native_host(self.config)
+        except Exception as e:  # noqa: BLE001
+            self.ext_msg.setText(f"تعذّر تجهيز إضافة Firefox: {e}")
+            return
+        try:
+            setup_tools.open_firefox_debug()
+        except Exception:  # noqa: BLE001
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        self.ext_msg.setText(
+            "جُهّزت إضافة Firefox. في صفحة about:debugging اختر «This Firefox» ثم «Load Temporary Add-on» "
+            f"واختر الملف manifest.json داخل المجلد:\n{folder}\n"
+            "التثبيت المؤقت يزول عند إغلاق Firefox. للتثبيت الدائم استخدم Firefox Developer Edition "
+            f"(أو Nightly) وافتح الملف:\n{xpi}")
 
     def _open_ext_folder(self):
         from PySide6.QtCore import QUrl
@@ -1607,6 +1947,9 @@ class SettingsDialog(QDialog):
     def apply(self):
         c = self.config
         c["download_dir"] = self.folder.text().strip() or c["download_dir"]
+        c["rules"] = self._collect_rules()
+        c["clean_names"] = self.clean.isChecked()
+        c["auto_retry"] = self.retry.isChecked()
         c["connections"] = self.conns.value()
         c["max_concurrent"] = self.conc.value()
         c["speed_limit_kb"] = self.limit.value()
@@ -1632,6 +1975,10 @@ class SettingsDialog(QDialog):
                 setup_tools.set_autostart(self.autostart.isChecked())
             except OSError:
                 pass
+        from . import hotkey as _hk
+        c["hotkey_enabled"] = self.hk_on.isChecked()
+        if _hk.parse(self.hk_key.text()):
+            c["hotkey"] = self.hk_key.text().strip()
         if setup_tools.autostart_supported() and self.tor_assoc.isChecked() != setup_tools.torrent_assoc_enabled():
             try:
                 setup_tools.set_torrent_assoc(self.tor_assoc.isChecked())

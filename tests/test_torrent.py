@@ -172,3 +172,32 @@ def test_server_forwards_torrent(tmp_path):
         assert not setup_tools.forward_to_running({"port": srv.port, "token": "bad"}, magnet)
     finally:
         srv.stop()
+
+
+def test_select_files(tmp_path, seeder):
+    """استبعاد ملف من التورنت: لا يُنزَّل، ويُحفظ الاختيار."""
+    from sayl.config import Config
+    from sayl.manager import DownloadManager
+    ses, tf, root = seeder
+    files = torrent.read_files(str(tf))
+    assert [f["path"] for f in files] == ["data/a.bin", "data/b.bin"]
+    skip_a = [f["index"] for f in files if f["path"].endswith("a.bin")]
+    _leecher_session()
+    m = DownloadManager(Config(str(tmp_path / "c.json")), state_path=str(tmp_path / "s.json"), autostart=False)
+    torrent.TorrentDownload.test_peers = [("127.0.0.1", ses.listen_port())]
+    try:
+        d = m.add(str(tf), dest_dir=str(tmp_path / "sel"), skip=skip_a)
+        assert d.skip == skip_a
+        d.start()
+        assert _wait(d, lambda: d.state in (COMPLETED, ERROR)), (d.state, d.error)
+        assert d.state == COMPLETED, d.error
+        assert (tmp_path / "sel" / "data" / "b.bin").read_bytes() == (root / "b.bin").read_bytes()
+        a = tmp_path / "sel" / "data" / "a.bin"
+        assert not a.exists() or a.stat().st_size == 0 or a.read_bytes() != (root / "a.bin").read_bytes()
+        assert d.size < 1_000_000
+        assert len(d.files()) == 2
+        m.save()
+        assert DownloadManager(m.config, state_path=str(tmp_path / "s.json"),
+                               autostart=False).items[d.id].skip == skip_a
+    finally:
+        torrent.TorrentDownload.test_peers = []

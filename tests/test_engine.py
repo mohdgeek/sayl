@@ -318,3 +318,121 @@ def test_mega_file_download_decrypts(tmp_path, monkeypatch):
         assert mega.is_folder("https://mega.nz/folder/AbCdEfGh#xyz")
     finally:
         srv.shutdown()
+
+
+def test_mega_folder(tmp_path, monkeypatch):
+    """مجلد MEGA: تعداد الملفات وفك مفاتيح العقد والهيكل الفرعي والتنزيل المشفّر."""
+    import base64
+    import json as _json
+    import struct
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from Cryptodome.Cipher import AES
+    from sayl import mega
+    from sayl.config import Config
+    from sayl.manager import DownloadManager
+
+    b64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")  # noqa: E731
+    fkey = os.urandom(16)
+
+    def attr(name, key16):
+        a = b"MEGA" + _json.dumps({"n": name}).encode()
+        a += b"\0" * (-len(a) % 16)
+        return b64(AES.new(key16, AES.MODE_CBC, iv=b"\0" * 16).encrypt(a))
+
+    def wrap(key):          # يشفّر مفتاح العقدة بمفتاح المجلد (ECB)
+        return b64(AES.new(fkey, AES.MODE_ECB).encrypt(key))
+
+    root_key = os.urandom(16)
+    sub_key = os.urandom(16)
+    contents, nodes_info = {}, {}
+    file_nodes = []
+    for h, name, parent in (("FILE0001", "root.txt", "ROOTROOT"), ("FILE0002", "inner.bin", "SUBSUB01")):
+        k = struct.unpack(">8I", os.urandom(32))
+        raw = struct.pack(">8I", *k)
+        aes_key, nonce = mega.keys_from_node(raw)
+        plain = os.urandom(200_000)
+        contents[h] = (AES.new(aes_key, AES.MODE_CTR, nonce=nonce, initial_value=0).encrypt(plain), plain)
+        nodes_info[h] = (raw, aes_key, name)
+        file_nodes.append({"h": h, "p": parent, "t": 0, "s": len(plain),
+                           "a": attr(name, aes_key), "k": "ROOTROOT:" + wrap(raw)})
+    nodes = [{"h": "ROOTROOT", "p": "", "t": 1, "a": attr("MyFolder", root_key), "k": "ROOTROOT:" + wrap(root_key)},
+             {"h": "SUBSUB01", "p": "ROOTROOT", "t": 1, "a": attr("sub", sub_key), "k": "ROOTROOT:" + wrap(sub_key)}] + file_nodes
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            req = _json.loads(self.rfile.read(int(self.headers["Content-Length"])))[0]
+            if req["a"] == "f":
+                out = [{"f": nodes}]
+            else:
+                h = req["n"]
+                out = [{"s": len(contents[h][0]), "at": next(n["a"] for n in nodes if n["h"] == h),
+                        "g": f"http://127.0.0.1:{srv.server_address[1]}/blob/{h}"}]
+            body = _json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            data = contents[self.path.rsplit("/", 1)[1]][0]
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setattr(mega, "API", f"http://127.0.0.1:{srv.server_address[1]}/cs")
+    try:
+        url = f"https://mega.nz/folder/ROOTROOT#{b64(fkey)}"
+        info = mega.list_folder(url)
+        assert info["name"] == "MyFolder"
+        assert [f["path"] for f in info["files"]] == ["MyFolder/root.txt", "MyFolder/sub/inner.bin"]
+        only = mega.list_folder(url + "/file/FILE0002")
+        assert [f["name"] for f in only["files"]] == ["inner.bin"]
+        cfg = Config(str(tmp_path / "c.json"))
+        m = DownloadManager(cfg, state_path=str(tmp_path / "s.json"), autostart=False)
+        d = m.add(url, dest_dir=str(tmp_path / "out"))
+        assert len(m.items) == 2
+        for it in list(m.items.values()):
+            it.start()
+        assert wait_for(lambda: all(i.state in (COMPLETED, "error") for i in m.items.values()), 30)
+        assert all(i.state == COMPLETED for i in m.items.values()), [i.error for i in m.items.values()]
+        assert (tmp_path / "out" / "MyFolder" / "root.txt").read_bytes() == contents["FILE0001"][1]
+        assert (tmp_path / "out" / "MyFolder" / "sub" / "inner.bin").read_bytes() == contents["FILE0002"][1]
+        m.save()
+        m2 = DownloadManager(cfg, state_path=str(tmp_path / "s.json"), autostart=False)
+        assert all(type(i).__name__ == "MegaDownload" and i.node for i in m2.items.values())
+    finally:
+        srv.shutdown()
+
+
+def test_refresh_url_resumes_partial(tmp_path):
+    """رابط منتهٍ: نوقف في المنتصف ثم نستبدل الرابط (نفس الملف/ETag) فيكمل من حيث توقف بدل البدء من الصفر."""
+    s = make_server(delay=0.01)
+    base = f"http://127.0.0.1:{s.server_address[1]}"
+    try:
+        cfg = Config(str(tmp_path / "cfg.json"))
+        cfg["download_dir"] = str(tmp_path / "dl")
+        m = DownloadManager(cfg, state_path=str(tmp_path / "s.json"), autostart=False)
+        d = m.add(base + "/old-link", start=False)
+        d.connections = 1
+        d.start()
+        assert wait_for(lambda: d.downloaded > 2_000_000, 30)
+        d.pause()
+        d.wait(10)
+        got = d.downloaded
+        assert d.state == PAUSED and 0 < got < len(DATA)
+        stale = m.find_stale(d.filename)
+        assert stale is d
+        m.refresh_url(d.id, base + "/new-link")
+        d.start()
+        assert wait_for(lambda: d.state in (COMPLETED, "error"), 60), d.state
+        assert d.state == COMPLETED, d.error
+        out = os.path.join(d.folder, d.filename)
+        assert hashlib.sha256(open(out, "rb").read()).hexdigest() == SHA
+    finally:
+        s.shutdown()

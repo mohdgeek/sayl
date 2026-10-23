@@ -1,5 +1,5 @@
 // سيل: يرصد الوسائط في كل تبويب، ويلتقط التحميلات، ويرسلها إلى البرنامج المحلي.
-importScripts("lib.js");
+if (typeof importScripts === "function") importScripts("lib.js");   // Firefox يحمّلها من manifest
 
 const DEFAULTS = { port: 6800, token: "", enabled: true, minSizeMB: 0 };
 const MAX_PER_TAB = 30;

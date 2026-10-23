@@ -63,6 +63,31 @@ def magnet_name(url):
         return ""
 
 
+def read_files(path_or_bytes):
+    """قائمة ملفات تورنت [{index, path, size}] (دون ملفات الحشو)، أو None إن تعذّرت القراءة."""
+    if lt is None:
+        return None
+    try:
+        ti = lt.torrent_info(path_or_bytes) if isinstance(path_or_bytes, (bytes, bytearray)) \
+            else lt.torrent_info(str(path_or_bytes))
+        return _list_files(ti)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _list_files(ti):
+    fs = ti.files()
+    out = []
+    for i in range(fs.num_files()):
+        try:
+            if fs.file_flags(i) & lt.file_storage.flag_pad_file:
+                continue
+        except Exception:  # noqa: BLE001
+            pass
+        out.append({"index": i, "path": fs.file_path(i), "size": fs.file_size(i)})
+    return out
+
+
 def friendly_error(e):
     t = str(e)
     if "No space" in t or "disk full" in t.lower():
@@ -107,11 +132,24 @@ def session(extra=None):
         return _ses
 
 
-def reset_session():
-    """للاختبارات: إنهاء الجلسة الحالية."""
+def shutdown():
+    """يغلق جلسة libtorrent بهدوء قبل خروج البرنامج (تجنّبًا لانهيار عند تفكيك المفسّر)."""
     global _ses
     with _ses_lock:
-        _ses = None
+        s, _ses = _ses, None
+    if s is not None:
+        try:
+            s.pause()
+        except Exception:  # noqa: BLE001
+            pass
+        del s
+        import gc
+        gc.collect()
+
+
+def reset_session():
+    """للاختبارات: إنهاء الجلسة الحالية."""
+    shutdown()
 
 
 def apply_limit(rate_bytes):
@@ -128,6 +166,8 @@ def apply_limit(rate_bytes):
 # ------------------------------------------------------------------ التنزيل
 class TorrentDownload:
     kind = "torrent"
+    retries = 0            # محاولات الاستئناف التلقائي
+    retry_at = None
     resumable = True
     connections = 1
     test_peers = []          # للاختبار فقط: أقران يُوصَل بهم مباشرة (host, port)
@@ -152,6 +192,8 @@ class TorrentDownload:
         self.etag = None
         self.segments = []
         self.torrent_file = os.path.join(TORRENT_DIR, self.id + ".torrent")
+        self.net_error = False
+        self.skip = []             # أرقام ملفات التورنت التي لا نريد تنزيلها
         self.peers = 0
         self.seeds = 0
         self.stage = ""            # وصف المرحلة الحالية (جلب البيانات، فحص الملفات…)
@@ -187,7 +229,42 @@ class TorrentDownload:
         return {"id": self.id, "kind": "torrent", "url": self.url, "headers": {},
                 "dest_dir": self.dest_dir, "filename": self.filename, "size": self.size,
                 "subfolder": self.subfolder, "final_dir": self.final_dir, "note": self.note,
-                "state": self.state, "created": self.created}
+                "skip": self.skip, "state": self.state, "created": self.created}
+
+    def files(self):
+        """ملفات التورنت إن كانت البيانات معروفة (من الجلسة أو من الملف المحفوظ)، وإلا قائمة فارغة."""
+        h = self._handle
+        try:
+            if h is not None:
+                ti = h.torrent_file()
+                if ti is not None:
+                    return _list_files(ti)
+            if os.path.isfile(self.torrent_file):
+                return read_files(self.torrent_file) or []
+            local = _local_path(self.url)
+            if not is_magnet(self.url) and os.path.isfile(local):
+                return read_files(local) or []
+        except Exception:  # noqa: BLE001
+            pass
+        return []
+
+    def set_skip(self, skip):
+        """يحدّد الملفات المستبعدة (تُطبَّق فورًا إن كان التورنت يعمل)."""
+        self.skip = sorted({int(i) for i in skip})
+        self._apply_priorities()
+
+    def _apply_priorities(self):
+        h = self._handle
+        if h is None:
+            return
+        try:
+            ti = h.torrent_file()
+            if ti is None:
+                return
+            n = ti.files().num_files()
+            h.prioritize_files([0 if i in set(self.skip) else 4 for i in range(n)])
+        except Exception:  # noqa: BLE001
+            pass
 
     def start(self):
         if self.active:
@@ -282,6 +359,9 @@ class TorrentDownload:
         p = lt.add_torrent_params()
         p.ti = ti
         p.save_path = self.dest_dir
+        if self.skip:
+            skip = set(self.skip)
+            p.file_priorities = [0 if i in skip else 4 for i in range(ti.files().num_files())]
         return p
 
     def _save_metadata(self, h):
@@ -306,6 +386,7 @@ class TorrentDownload:
             for peer in self.test_peers:
                 h.connect_peer(peer)
             meta_saved = os.path.isfile(self.torrent_file)
+            prio_done = False
             started = time.monotonic()
             while not self._stop.is_set():
                 st = h.status()
@@ -327,7 +408,10 @@ class TorrentDownload:
                     ti = h.torrent_file()
                     if ti is not None:
                         self.filename = sanitize_filename(ti.name())
-                        self.size = ti.total_size()
+                        if not prio_done:
+                            self._apply_priorities()
+                            prio_done = True
+                    self.size = int(st.total_wanted) or self.size
                     if st.state in (lt.torrent_status.checking_files,
                                     lt.torrent_status.checking_resume_data):
                         self.state, self.stage = DOWNLOADING, "جارٍ فحص الملفات الموجودة…"
@@ -352,6 +436,7 @@ class TorrentDownload:
             if not self._stop.is_set():
                 self.state = ERROR
                 self.error = friendly_error(e)
+                self.net_error = False
         finally:
             self.speed = 0.0
             self._drop()                # لا نبقى نرفع بعد الاكتمال أو الإيقاف؛ الملفات تبقى

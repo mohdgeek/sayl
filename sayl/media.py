@@ -335,6 +335,8 @@ def build_format(height=None, audio_only=False, ffmpeg=False):
 
 class MediaDownload:
     kind = "media"
+    retries = 0            # محاولات الاستئناف التلقائي
+    retry_at = None
     resumable = True
     connections = 1
 
@@ -372,6 +374,7 @@ class MediaDownload:
         self._eta = None
         self.etag = None
         self.segments = []
+        self.net_error = False
 
     # ---- نفس واجهة Download
     @property
@@ -528,6 +531,8 @@ class MediaDownload:
             if self._stop.is_set():
                 return
             self.error = log.last_error or str(e)[:300]
+            from .engine import is_network_error
+            self.net_error = is_network_error(self.error) or is_network_error(e)
             self.state = ERROR
         finally:
             self.speed = 0.0

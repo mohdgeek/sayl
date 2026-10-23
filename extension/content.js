@@ -16,8 +16,11 @@
       svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.2;
           stroke-linecap:round;stroke-linejoin:round}
     </style>
-    <button class="b" part="b"><svg viewBox="0 0 24 24"><path d="M12 4v11M6.5 10.5 12 16l5.5-5.5M5 20h14"/></svg><span>تحميل</span></button>`;
-  const btn = root.querySelector(".b");
+    <button class="b" part="b"><svg viewBox="0 0 24 24"><path d="M12 4v11M6.5 10.5 12 16l5.5-5.5M5 20h14"/></svg><span>تحميل</span></button>
+    <button class="b pl" style="display:none;left:18px;bottom:18px;top:auto"><svg viewBox="0 0 24 24"><path d="M4 6h12M4 11h12M4 16h7M17 14v6l5-3z"/></svg><span>تحميل القائمة</span></button>`;
+  const btn = root.querySelector(".b:not(.pl)");
+  const plBtn = root.querySelector(".pl");
+  const plLabel = plBtn.querySelector("span");
   const label = root.querySelector("span");
   document.documentElement.appendChild(host);
 
@@ -86,4 +89,37 @@
     e.stopPropagation();
     try { chrome.runtime.sendMessage({ type: "send", url: a.href, kind: "torrent" }); } catch (err) { /* لا بأس */ }
   }, true);
+
+  // يوتيوب: زر ثابت لتحميل قائمة التشغيل المفتوحة كاملة (يعرض سيل قائمة الفيديوهات لتختار منها)
+  function playlistUrl() {
+    if (!/(^|\.)youtube\.com$/.test(location.hostname)) return "";
+    const id = new URLSearchParams(location.search).get("list") || "";
+    if (!/^(PL|UU|OL|FL|LL)[\w-]{8,}$/.test(id)) return "";        // نتجاهل قوائم «الميكس» اللانهائية
+    if (!/^\/(playlist|watch)/.test(location.pathname)) return "";
+    return "https://www.youtube.com/playlist?list=" + id;
+  }
+  let plBusy = false;
+  setInterval(() => {
+    if (plBusy) return;
+    plBtn.style.display = playlistUrl() ? "flex" : "none";
+  }, 1500);
+  plBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const url = playlistUrl();
+    if (!url || plBusy) return;
+    plBusy = true;
+    plLabel.textContent = "جارٍ الإرسال…";
+    let res;
+    try {
+      res = await chrome.runtime.sendMessage({ type: "send", url, kind: "media", referrer: location.href });
+    } catch (err) { res = { ok: false }; }
+    plBtn.classList.add(res && res.ok ? "ok" : "err");
+    plLabel.textContent = res && res.ok ? "تمت الإضافة ✓" : "تعذّر الاتصال بالبرنامج";
+    setTimeout(() => {
+      plBusy = false;
+      plBtn.classList.remove("ok", "err");
+      plLabel.textContent = "تحميل القائمة";
+    }, 2200);
+  });
 })();

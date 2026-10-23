@@ -1,5 +1,6 @@
 """مكوّنات الواجهة المخصّصة."""
 import os
+import time
 import urllib.parse
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
@@ -262,7 +263,8 @@ class DownloadRow(QFrame):
         if d.kind == "http" and not d.filename:
             cat = "other"
         key = (st, name, round(d.progress, 3), int(d.speed // 1024), d.size, d.error, cat,
-               getattr(d, "peers", 0), getattr(d, "stage", ""))
+               getattr(d, "peers", 0), getattr(d, "stage", ""), getattr(d, "hash_state", None),
+               int(max(0, (getattr(d, "retry_at", None) or 0) - time.time()) // 3) if st == ERROR else 0)
         if key == self._last and not force:
             return
         self._last = key
@@ -277,14 +279,21 @@ class DownloadRow(QFrame):
             self._chip("مكتمل", "ok")
             self.bar.set_value(1.0, "ok")
             self.meta.setObjectName("Meta")
-            parts = [ltr(fmt_size(d.size)) if d.size else "", LABELS[cat], ltr(host_of(d.url))]
+            hs = getattr(d, "hash_state", None)
+            parts = [ltr(fmt_size(d.size)) if d.size else "", LABELS[cat], ltr(host_of(d.url)),
+                     {"ok": "✓ البصمة مطابقة", "bad": "⚠ البصمة لا تطابق",
+                      "checking": "جارٍ التحقق من البصمة…"}.get(hs, "")]
             self._meta(" · ".join(p for p in parts if p), False)
             self.speed.setText("")
             self.eta.setText("")
         elif st == ERROR:
             self._chip("فشل", "err")
             self.bar.set_value(max(d.progress, 0.04), "err")
-            self._meta(d.error or "حدث خطأ غير معروف", True)
+            msg = d.error or "حدث خطأ غير معروف"
+            ra = getattr(d, "retry_at", None)
+            if getattr(d, "net_error", False) and ra:
+                msg += f" · إعادة المحاولة تلقائيًا بعد {max(0, int(ra - time.time()))} ث"
+            self._meta(msg, True)
             self.speed.setText("")
             self.eta.setText("")
         elif st == PAUSED or st == CANCELED:
