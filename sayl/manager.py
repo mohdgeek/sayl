@@ -157,7 +157,7 @@ class DownloadManager:
     # ------------------------------------------------------------ العمليات
     def add(self, url, headers=None, dest_dir=None, filename=None, start=True,
             kind="auto", height=None, audio_only=False, allow_duplicate=False,
-            force=True, subs=None, subfolder=None, note="", skip=None, expected_hash=""):
+            force=True, subs=None, subfolder=None, note="", skip=None, expected_hash="", start_at=None):
         url = url.strip().strip('"')
         is_tor = kind == "torrent" or torrent.is_torrent_url(url)
         if not is_tor and not url.lower().startswith(("http://", "https://")):
@@ -205,7 +205,10 @@ class DownloadManager:
         d.force = bool(force)
         d.expected_hash = normalize_hash(expected_hash)
         d.hash_state = None
-        if not start:
+        d.start_at = float(start_at) if start_at else None
+        if d.start_at:
+            d.force = False
+        if not start and not d.start_at:
             d.state = PAUSED
         with self._lock:
             self.items[d.id] = d
@@ -332,10 +335,32 @@ class DownloadManager:
             return int(c["peak_kb"])
         return int(c["speed_limit_kb"])
 
+    def _track_day(self):
+        """يجمع بايتات اليوم الحالي (فروق التنزيل بين نبضتين) لحدّ الاستهلاك اليومي."""
+        today = dt.date.today().isoformat()
+        if getattr(self, "_day", None) != today:
+            self._day, self.day_bytes, self._seen = today, 0, {}
+        seen = getattr(self, "_seen", {})
+        for d in list(self.items.values()):
+            try:
+                cur = int(d.downloaded)
+            except Exception:  # noqa: BLE001
+                continue
+            prev = seen.get(d.id)
+            if prev is not None and cur > prev:
+                self.day_bytes += cur - prev
+            seen[d.id] = cur
+        self._seen = seen
+
+    def capped(self):
+        cap = float(self.config["daily_cap_gb"] or 0)
+        return cap > 0 and getattr(self, "day_bytes", 0) >= cap * 1024 ** 3
+
     def _tick(self):
         """خطوة مجدولة واحدة (متزامنة لتسهل الاختبار)."""
         now = self.now_fn()
-        is_open = self.schedule_open(now)
+        self._track_day()
+        is_open = self.schedule_open(now) and not self.capped()
         self.limiter.set_rate(self.effective_limit_kb(now) * 1024)
         torrent.apply_limit(self.limiter.rate)
         engine.CLEAN_NAMES = bool(self.config["clean_names"])
@@ -344,8 +369,9 @@ class DownloadManager:
         self._auto_retry()
         with self._lock:
             if not is_open:     # أغلقت النافذة: أوقف ما لم يُطلب يدويًا وأعده للطابور
+                capped = self.capped()
                 for d in self.items.values():
-                    if d.active and not d.force:
+                    if d.active and (capped or not d.force):
                         d.pause()
                         d.state = QUEUED
             running = sum(1 for d in self.items.values() if d.state in (PROBING, DOWNLOADING))
@@ -354,7 +380,14 @@ class DownloadManager:
                 d = self.items.get(i)
                 if running >= limit:
                     break
-                if d and d.state == QUEUED and not d.active and (is_open or d.force):
+                if d and d.state == QUEUED and not d.active:
+                    if d.start_at:
+                        if time.time() < d.start_at:
+                            continue            # مجدول لوقت لاحق: لا يستهلك مكانًا في الطابور
+                        d.start_at = None
+                        d.force = True          # حان وقته: يبدأ حتى خارج نافذة الجدولة العامة
+                    elif not (is_open or (d.force and not self.capped())):
+                        continue
                     d.start()
                     running += 1
 
@@ -404,6 +437,23 @@ class DownloadManager:
             d.force = True
             d.state = QUEUED
             self.events.append(f"إعادة محاولة تلقائية ({n + 1}): {d.filename or d.url[:50]}")
+
+    def schedule(self, id, when):
+        """يجدول بدء عنصر في وقت محدد (طابع زمني). when=None يلغي الجدولة ويتركه متوقفًا."""
+        d = self.items.get(id)
+        if not d or d.state == COMPLETED:
+            raise ValueError("لا يمكن جدولة هذا العنصر")
+        if when is not None and when <= time.time():
+            raise ValueError("اختر وقتًا في المستقبل")
+        if d.active:
+            d.pause()
+            d.wait(10)
+        if when is None:
+            d.start_at, d.state = None, PAUSED
+        else:
+            d.start_at, d.state, d.force = float(when), QUEUED, False
+        self.save()
+        return d
 
     def refresh_url(self, id, new_url, headers=None):
         """يستبدل رابط تحميل منتهٍ/متوقف برابط جديد للملف نفسه ويكمل من حيث توقف (إن تطابق الحجم)."""
@@ -568,6 +618,7 @@ class DownloadManager:
                         it = self.items[i]
                         e = it.to_dict()
                         e["hash"] = getattr(it, "expected_hash", "")
+                        e["start_at"] = getattr(it, "start_at", None)
                         e["hash_state"] = getattr(it, "hash_state", None) if getattr(it, "hash_state", None) in ("ok", "bad") else None
                         data.append(e)
             os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
@@ -609,11 +660,14 @@ class DownloadManager:
                                                e.get("etag"))
             d._counted = state == COMPLETED          # لا نعيد عدّ ما اكتمل في جلسات سابقة
             d.expected_hash = e.get("hash", "")
+            d.start_at = e.get("start_at")
             d.hash_state = e.get("hash_state")
             d.subfolder = e.get("subfolder", False)
             d.note = e.get("note", "")
             d.final_dir = e.get("final_dir")
             d.created = e.get("created", d.created)
             d.state = state
+            if state != COMPLETED and d.start_at and d.start_at > time.time() - 86400:
+                d.state, d.force = QUEUED, False      # الجدولة تبقى بعد إعادة التشغيل
             self.items[d.id] = d
             self._order.append(d.id)
