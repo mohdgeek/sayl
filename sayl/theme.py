@@ -44,16 +44,28 @@ PAPER = dict(LIGHT, bg="#F7F1E5", side="#EFE7D6", surface="#FFFCF5", surface2="#
 SKY = dict(LIGHT, bg="#EAF3FB", side="#DDEBF7", surface="#FFFFFF", surface2="#E3EEF8",
            line="#CFE0EF", line2="#B4CCE2", text="#10243A", sub="#587390", track="#CFE0EF")
 
+GLASS = dict(DARK, bg="#0F1420", side="#0A0F1A", surface="#27324A", surface2="#34425F",
+             line="#51607F", line2="#6B7CA0", text="#F2F5FC", sub="#B4BED6", track="#3A4766")
+GLASS_LIGHT = dict(LIGHT, bg="#F2F6FC", side="#E4ECF8", surface="#FFFFFF", surface2="#EAF0FA",
+                   line="#C3D0E6", line2="#A9BBD8", text="#12203A", sub="#4D6285", track="#C3D0E6")
+GLASS_BASES = ("glass", "glass_light")
+GLASS_ALPHA = {"dark": {"bg": 0.42, "side": 0.55, "surface": 0.50, "surface2": 0.60},
+               "light": {"bg": 0.45, "side": 0.55, "surface": 0.58, "surface2": 0.66}}
+GLASS_READY = False     # تُفعَّل عند تشغيل البرنامج بسمة زجاجية (تحتاج نوافذ شفافة منذ إنشائها)
+
 BASES = {"dark": DARK, "midnight": MIDNIGHT, "black": BLACK, "ocean": OCEAN, "forest": FOREST,
-         "plum": PLUM, "mocha": MOCHA, "nord": NORD, "light": LIGHT, "paper": PAPER, "sky": SKY}
+         "plum": PLUM, "mocha": MOCHA, "nord": NORD, "light": LIGHT, "paper": PAPER, "sky": SKY,
+         "glass": GLASS, "glass_light": GLASS_LIGHT}
 BASE_LABELS = {"dark": "داكن", "midnight": "منتصف الليل", "black": "أسود (OLED)", "ocean": "المحيط",
                "forest": "الغابة", "plum": "البنفسج", "mocha": "موكا", "nord": "نورد",
-               "light": "فاتح", "paper": "ورقي دافئ", "sky": "سماوي"}
-LIGHT_BASES = ("light", "paper", "sky")
+               "light": "فاتح", "paper": "ورقي دافئ", "sky": "سماوي",
+               "glass": "زجاجي داكن ✦", "glass_light": "زجاجي فاتح ✦"}
+LIGHT_BASES = ("light", "paper", "sky", "glass_light")
 # لون إبراز يناسب كل سمة (يُقترح عند اختيارها، ويمكنك تغييره بعدها)
 THEME_ACCENT = {"dark": "#FFB020", "midnight": "#FFB020", "black": "#FFB020", "ocean": "#2DD4BF",
                 "forest": "#5FD39A", "plum": "#C084FC", "mocha": "#E0A96D", "nord": "#88C0D0",
-                "light": "#F5A300", "paper": "#C2410C", "sky": "#0284C7"}
+                "light": "#F5A300", "paper": "#C2410C", "sky": "#0284C7",
+                "glass": "#7CC4FF", "glass_light": "#2B7FFF"}
 ACCENTS = ["#FFB020", "#2DD4BF", "#8B7CFF", "#FF6FA5", "#4DB6FF", "#5FD39A", "#FF7A45"]
 
 C = dict(DARK)          # السمة الحالية، تقرؤها الأدوات المرسومة يدويًا
@@ -129,6 +141,18 @@ def set_theme(base="dark", accent=None, ok=None, err=None):
     return build_qss()
 
 
+_started = False
+
+
+def _mark_started(config):
+    """هل بدأ البرنامج بسمة زجاجية؟ حينها تُنشأ النوافذ شفافة وتعمل السمة كاملة."""
+    global _started, GLASS_READY
+    import sys
+    _started = True
+    base = config["light_base"] if config["theme"] == "light" else config["dark_base"]
+    GLASS_READY = sys.platform == "win32" and base in GLASS_BASES
+
+
 OPACITY = 1.0          # شفافية النوافذ (0.5–1.0)
 
 
@@ -153,12 +177,17 @@ def install_opacity(app):
 
     class _F(QObject):
         def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Polish and GLASS_READY and hasattr(obj, "isWindow") and obj.isWindow() \
+                    and hasattr(obj, "windowType"):
+                from PySide6.QtCore import Qt
+                if obj.windowType() in (Qt.Window, Qt.Dialog):
+                    obj.setAttribute(Qt.WA_TranslucentBackground, True)
             if ev.type() == QEvent.Show and hasattr(obj, "isWindow") and obj.isWindow() \
                     and hasattr(obj, "setWindowOpacity") and abs(obj.windowOpacity() - OPACITY) > 0.001:
                 obj.setWindowOpacity(OPACITY)
             if ev.type() == QEvent.Show and hasattr(obj, "isWindow") and obj.isWindow():
                 from . import winstyle
-                if winstyle.STYLE != "default":
+                if winstyle.STYLE != "default" or glass_active():
                     winstyle.apply(obj)
             return False
 
@@ -168,6 +197,9 @@ def install_opacity(app):
 
 
 def apply_config(config):
+    global GLASS_READY
+    if not _started:                       # أول استدعاء عند تشغيل البرنامج
+        _mark_started(config)
     apply_opacity(config["opacity"])
     base = config["light_base"] if config["theme"] == "light" else config["dark_base"]
     if base not in BASES:
@@ -178,7 +210,38 @@ def apply_config(config):
     return qss
 
 
+def glass_active():
+    return BASE in GLASS_BASES and GLASS_READY
+
+
+def _glassify(qss):
+    """يحوّل خلفيات الأسطح إلى شبه شفافة (النوافذ نفسها شفافة بخلفية Acrylic من ويندوز).
+    القوائم المنبثقة تبقى معتمة لأنها نوافذ مستقلة غير شفافة."""
+    import re
+    al = GLASS_ALPHA["light" if NAME == "light" else "dark"]
+    m = {C[k].upper(): (k, a) for k, a in al.items()}
+    pat = re.compile(r"(background(?:-color)?:\s*)(#[0-9A-Fa-f]{6})")
+    out, skip = [], False
+    for line in qss.split("\n"):
+        if line.startswith(("QMenu", "QToolTip", "QComboBox QAbstractItemView", "QMessageBox")):
+            skip = "}" not in line
+            out.append(line)
+            continue
+        if skip:
+            skip = "}" not in line
+            out.append(line)
+            continue
+        out.append(pat.sub(lambda mo: mo.group(1) + rgba(mo.group(2), m[mo.group(2).upper()][1])
+                           if mo.group(2).upper() in m else mo.group(0), line))
+    return "\n".join(out)
+
+
 def build_qss():
+    q = _build_qss()
+    return _glassify(q) if glass_active() else q
+
+
+def _build_qss():
     c = C
     a = _assets(c)
     return f"""

@@ -79,6 +79,18 @@ def _render_pdf_first_page(data):
         return None
 
 
+def _scroll(widget):
+    """يلفّ صفحة إعدادات بشريط تمرير كي لا تتجاوز النافذة حجم الشاشة."""
+    from PySide6.QtWidgets import QScrollArea
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.NoFrame)
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    sa.setStyleSheet("QScrollArea{background:transparent;} QScrollArea > QWidget > QWidget{background:transparent;}")
+    sa.setWidget(widget)
+    return sa
+
+
 class _PreviewFetch(QObject):
     done = Signal(object)
 
@@ -1408,13 +1420,13 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(580)
 
         tabs = QTabWidget()
-        tabs.addTab(self._general(), "عام")
-        tabs.addTab(self._rules_tab(), "القواعد")
-        tabs.addTab(self._schedule(), "الجدولة")
-        tabs.addTab(self._video(), "الفيديو")
-        tabs.addTab(self._look(), "المظهر")
-        tabs.addTab(self._browsers(), "المتصفحات")
-        tabs.addTab(self._app_update(), "التحديث")
+        tabs.addTab(_scroll(self._general()), "عام")
+        tabs.addTab(_scroll(self._rules_tab()), "القواعد")
+        tabs.addTab(_scroll(self._schedule()), "الجدولة")
+        tabs.addTab(_scroll(self._video()), "الفيديو")
+        tabs.addTab(_scroll(self._look()), "المظهر")
+        tabs.addTab(_scroll(self._browsers()), "المتصفحات")
+        tabs.addTab(_scroll(self._app_update()), "التحديث")
         self.tabs = tabs
 
         ok = QPushButton("حفظ")
@@ -1436,6 +1448,11 @@ class SettingsDialog(QDialog):
         lay.addWidget(t)
         lay.addWidget(tabs)
         lay.addLayout(btns)
+        scr = QApplication.primaryScreen()
+        if scr is not None:                    # لا تتجاوز النافذة ارتفاع الشاشة المتاح
+            h = scr.availableGeometry().height()
+            self.resize(max(self.minimumWidth(), 620), min(760, h - 80))
+            self.setMaximumHeight(h - 40)
 
     # ------------------------------------------------------------ القواعد
     def _rules_tab(self):

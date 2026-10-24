@@ -823,6 +823,10 @@ class MainWindow(QMainWindow):
             QApplication.instance().setStyleSheet(theme.apply_config(self.config))
             self.retint()
             self.refresh(force=True)
+            base = self.config["light_base"] if self.config["theme"] == "light" else self.config["dark_base"]
+            if base in theme.GLASS_BASES and not theme.GLASS_READY:
+                QMessageBox.information(self, "سيل", "السمة الزجاجية تحتاج إعادة تشغيل البرنامج كي تظهر "
+                                        "الشفافية كاملة (ويندوز 11). أغلق سيل من أيقونة الساعة ثم افتحه.")
             if dlg.ready_path:
                 self.manager.shutdown()
                 selfupdate.apply_and_restart(dlg.ready_path)

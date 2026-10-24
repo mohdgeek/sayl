@@ -44,7 +44,7 @@ def _apply_native(hwnd, attrs, extend):
     if extend:               # يمدّ إطار DWM كي يظهر تأثير Mica/Acrylic خلف شريط العنوان
         class MARGINS(ctypes.Structure):
             _fields_ = [("l", c_int), ("r", c_int), ("t", c_int), ("b", c_int)]
-        m = MARGINS(-1, -1, -1, -1) if extend else MARGINS(0, 0, 0, 0)
+        m = MARGINS(-1, -1, -1, -1) if extend == "full" else MARGINS(0, 0, 1, 0)   # بالكامل أو شريط العنوان فقط
         dwm.DwmExtendFrameIntoClientArea(wintypes.HWND(hwnd), byref(m))
 
 
@@ -54,8 +54,12 @@ def apply(win, style=None):
     try:
         from . import theme
         style = style or STYLE
+        full = theme.glass_active()              # سمة زجاجية: Acrylic على كامل النافذة
+        if full:
+            style = "acrylic"
         attrs = plan(style, theme.C, theme.NAME == "dark")
-        _apply_native(int(win.winId()), attrs, extend=style in ("mica", "acrylic"))
+        _apply_native(int(win.winId()), attrs, extend=("full" if full else
+                                                       "top" if style in ("mica", "acrylic") else None))
         return True
     except Exception:  # noqa: BLE001
         return False

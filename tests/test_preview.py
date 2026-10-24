@@ -172,3 +172,24 @@ def test_titlebar_plan():
     assert dict(winstyle.plan("bogus", theme.C, True)) == d
     assert winstyle.colorref("#102030") == 0x302010
     assert winstyle.apply(object()) is False      # خارج ويندوز: لا يفعل شيئًا
+
+
+def test_glass_themes_and_settings_fit(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from sayl import theme
+    from sayl.dialogs import SettingsDialog
+    for k in theme.GLASS_BASES:
+        theme.GLASS_READY = True
+        q = theme.set_theme(k, theme.THEME_ACCENT[k])
+        assert "rgba(" in q and "QMenu { background: #" in q     # الأسطح شفافة والقوائم معتمة
+        theme.GLASS_READY = False
+        assert "QMainWindow, QDialog { background: #" in theme.set_theme(k)
+    theme.set_theme("dark")
+    cfg = Config(str(tmp_path / "c.json"))
+    dlg = SettingsDialog(cfg)
+    h = app.primaryScreen().availableGeometry().height()
+    assert dlg.maximumHeight() <= h and dlg.height() <= h
+    dlg.tabs.setCurrentIndex(4)
