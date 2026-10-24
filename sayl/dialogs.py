@@ -1402,7 +1402,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.ready_path = None
         self.config = config
-        self._orig = {k: config[k] for k in ("theme", "dark_base", "accent", "ok_color", "err_color")}
+        self._orig = {k: config[k] for k in ("theme", "dark_base", "light_base", "accent", "ok_color", "err_color")}
         self._sel = dict(self._orig)
         self.setWindowTitle("الإعدادات")
         self.setMinimumWidth(580)
@@ -1974,7 +1974,7 @@ class SettingsDialog(QDialog):
         self.base_combo = QComboBox()
         for k, t in theme.BASE_LABELS.items():
             self.base_combo.addItem(t, k)
-        cur = "light" if self._sel["theme"] == "light" else self._sel["dark_base"]
+        cur = self._sel["light_base"] if self._sel["theme"] == "light" else self._sel["dark_base"]
         self.base_combo.setCurrentIndex(max(0, self.base_combo.findData(cur)))
         self.base_combo.currentIndexChanged.connect(self._base_changed)
         lay.addWidget(self.base_combo)
@@ -2075,15 +2075,16 @@ class SettingsDialog(QDialog):
 
     def _base_changed(self):
         b = self.base_combo.currentData()
-        if b == "light":
-            self._sel["theme"] = "light"
+        if b in theme.LIGHT_BASES:
+            self._sel["theme"], self._sel["light_base"] = "light", b
         else:
             self._sel["theme"], self._sel["dark_base"] = "dark", b
+        self._sel["accent"] = theme.THEME_ACCENT.get(b, self._sel["accent"])
         self._preview()
 
     def _reset_colors(self, *_):
         """يعيد السمة والألوان كلها إلى الافتراضي (داكن + إبراز كهرماني)."""
-        self._sel.update(theme="dark", dark_base="dark", accent="#FFB020", ok_color="", err_color="")
+        self._sel.update(theme="dark", dark_base="dark", light_base="light", accent="#FFB020", ok_color="", err_color="")
         self.base_combo.blockSignals(True)
         self.base_combo.setCurrentIndex(max(0, self.base_combo.findData("dark")))
         self.base_combo.blockSignals(False)
@@ -2092,7 +2093,7 @@ class SettingsDialog(QDialog):
     def _preview(self):
         """معاينة مباشرة؛ تُلغى عند الإلغاء."""
         s = self._sel
-        base = "light" if s["theme"] == "light" else s["dark_base"]
+        base = s["light_base"] if s["theme"] == "light" else s["dark_base"]
         QApplication.instance().setStyleSheet(
             theme.set_theme(base, s["accent"], s["ok_color"], s["err_color"]))
         for sws, key in ((self.accent_sw, "accent"), (self.ok_sw, "ok_color"), (self.err_sw, "err_color")):

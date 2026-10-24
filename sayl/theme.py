@@ -27,8 +27,33 @@ MIDNIGHT = dict(DARK, bg="#0B1020", side="#080C18", surface="#121A30", surface2=
                 line="#222E4D", line2="#31406A", sub="#8E9AC0", track="#222E4D")
 BLACK = dict(DARK, bg="#000000", side="#000000", surface="#0D0D10", surface2="#17171C",
              line="#1F1F26", line2="#2E2E38", sub="#8A8A99", track="#1F1F26")
-BASES = {"dark": DARK, "midnight": MIDNIGHT, "black": BLACK, "light": LIGHT}
-BASE_LABELS = {"dark": "داكن", "midnight": "منتصف الليل", "black": "أسود (OLED)", "light": "فاتح"}
+OCEAN = dict(DARK, bg="#07151B", side="#051017", surface="#0E2229", surface2="#143039",
+             line="#1B3B45", line2="#27505D", text="#E6F4F6", sub="#86A8B0", track="#1B3B45")
+FOREST = dict(DARK, bg="#0B130F", side="#080E0B", surface="#121E17", surface2="#192A20",
+              line="#213528", line2="#2F4A39", text="#E8F3EC", sub="#8AA895", track="#213528")
+PLUM = dict(DARK, bg="#130E1B", side="#0E0A15", surface="#1D1528", surface2="#271C36",
+            line="#32244A", line2="#47346A", text="#F0E9F8", sub="#A394BC", track="#32244A")
+MOCHA = dict(DARK, bg="#17110D", side="#110C09", surface="#221A14", surface2="#2D231B",
+             line="#3A2E24", line2="#52422F", text="#F3EAE0", sub="#B09C86", track="#3A2E24")
+NORD = dict(DARK, bg="#242933", side="#1D212A", surface="#2E3440", surface2="#3B4252",
+            line="#434C5E", line2="#566178", text="#ECEFF4", sub="#9AA7BE", track="#434C5E")
+PAPER = dict(LIGHT, bg="#F7F1E5", side="#EFE7D6", surface="#FFFCF5", surface2="#F1E9D8",
+             line="#E2D8C3", line2="#CFC2A6", text="#2A2218", sub="#7A6C55", track="#E2D8C3",
+             accent="#C2410C", accent_hover="#D9531C", on_accent="#FFFFFF",
+             accent_soft="rgba(194,65,12,0.14)")
+SKY = dict(LIGHT, bg="#EAF3FB", side="#DDEBF7", surface="#FFFFFF", surface2="#E3EEF8",
+           line="#CFE0EF", line2="#B4CCE2", text="#10243A", sub="#587390", track="#CFE0EF")
+
+BASES = {"dark": DARK, "midnight": MIDNIGHT, "black": BLACK, "ocean": OCEAN, "forest": FOREST,
+         "plum": PLUM, "mocha": MOCHA, "nord": NORD, "light": LIGHT, "paper": PAPER, "sky": SKY}
+BASE_LABELS = {"dark": "داكن", "midnight": "منتصف الليل", "black": "أسود (OLED)", "ocean": "المحيط",
+               "forest": "الغابة", "plum": "البنفسج", "mocha": "موكا", "nord": "نورد",
+               "light": "فاتح", "paper": "ورقي دافئ", "sky": "سماوي"}
+LIGHT_BASES = ("light", "paper", "sky")
+# لون إبراز يناسب كل سمة (يُقترح عند اختيارها، ويمكنك تغييره بعدها)
+THEME_ACCENT = {"dark": "#FFB020", "midnight": "#FFB020", "black": "#FFB020", "ocean": "#2DD4BF",
+                "forest": "#5FD39A", "plum": "#C084FC", "mocha": "#E0A96D", "nord": "#88C0D0",
+                "light": "#F5A300", "paper": "#C2410C", "sky": "#0284C7"}
 ACCENTS = ["#FFB020", "#2DD4BF", "#8B7CFF", "#FF6FA5", "#4DB6FF", "#5FD39A", "#FF7A45"]
 
 C = dict(DARK)          # السمة الحالية، تقرؤها الأدوات المرسومة يدويًا
@@ -88,7 +113,7 @@ def set_theme(base="dark", accent=None, ok=None, err=None):
     if base not in BASES:
         base = "dark"
     BASE = base
-    NAME = "light" if base == "light" else "dark"
+    NAME = "light" if base in LIGHT_BASES else "dark"
     C.clear()
     C.update(BASES[base])
     if valid_color(accent):
@@ -105,7 +130,9 @@ def set_theme(base="dark", accent=None, ok=None, err=None):
 
 
 def apply_config(config):
-    base = "light" if config["theme"] == "light" else config["dark_base"]
+    base = config["light_base"] if config["theme"] == "light" else config["dark_base"]
+    if base not in BASES:
+        base = "light" if config["theme"] == "light" else "dark"
     return set_theme(base, config["accent"], config["ok_color"], config["err_color"])
 
 

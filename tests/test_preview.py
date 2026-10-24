@@ -113,3 +113,24 @@ def test_daily_cap(tmp_path):
     assert len(started) == n
     cfg["daily_cap_gb"] = 0
     assert not m.capped()
+
+
+def test_all_themes_build(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from sayl import theme
+    for k in theme.BASES:
+        q = theme.set_theme(k, theme.THEME_ACCENT[k])
+        assert "QMainWindow" in q
+        assert (theme.NAME == "light") == (k in theme.LIGHT_BASES)
+    cfg = Config(str(tmp_path / "c.json"))
+    cfg["theme"], cfg["light_base"] = "light", "paper"
+    theme.apply_config(cfg)
+    assert theme.C["bg"] == "#F7F1E5"
+    cfg["theme"], cfg["dark_base"] = "dark", "nord"
+    theme.apply_config(cfg)
+    assert theme.C["bg"] == "#242933"
+    theme.set_theme("dark")
+    del app
