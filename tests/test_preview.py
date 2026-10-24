@@ -134,3 +134,26 @@ def test_all_themes_build(tmp_path):
     assert theme.C["bg"] == "#242933"
     theme.set_theme("dark")
     del app
+
+
+def test_window_opacity(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QDialog
+    app = QApplication.instance() or QApplication([])
+    from sayl import theme
+    f = theme.install_opacity(app)
+    w1 = QDialog()
+    w1.show()
+    theme.apply_opacity(70)
+    assert abs(w1.windowOpacity() - 0.7) < 0.01
+    w2 = QDialog()
+    w2.show()                                   # نافذة جديدة ترث الشفافية
+    app.processEvents()
+    assert abs(w2.windowOpacity() - 0.7) < 0.01
+    theme.apply_opacity(10)                     # لا تنزل عن 50%
+    assert theme.OPACITY == 0.5
+    theme.apply_opacity(100)
+    assert w1.windowOpacity() == 1.0
+    app.removeEventFilter(f)
+    w1.close(); w2.close()

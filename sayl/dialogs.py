@@ -1402,7 +1402,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.ready_path = None
         self.config = config
-        self._orig = {k: config[k] for k in ("theme", "dark_base", "light_base", "accent", "ok_color", "err_color")}
+        self._orig = {k: config[k] for k in ("theme", "dark_base", "light_base", "opacity", "accent", "ok_color", "err_color")}
         self._sel = dict(self._orig)
         self.setWindowTitle("الإعدادات")
         self.setMinimumWidth(580)
@@ -1979,6 +1979,25 @@ class SettingsDialog(QDialog):
         self.base_combo.currentIndexChanged.connect(self._base_changed)
         lay.addWidget(self.base_combo)
 
+        lay.addWidget(self._cap("شفافية النوافذ"))
+        from PySide6.QtWidgets import QSlider
+        orow = QHBoxLayout()
+        self.op_slider = QSlider(Qt.Horizontal)
+        self.op_slider.setRange(50, 100)
+        self.op_slider.setValue(int(self._sel["opacity"]))
+        self.op_slider.setLayoutDirection(Qt.LeftToRight)
+        self.op_lbl = QLabel(f"{int(self._sel['opacity'])}%")
+        self.op_lbl.setMinimumWidth(42)
+
+        def _op(v):
+            self._sel["opacity"] = v
+            self.op_lbl.setText(f"{v}%")
+            self._preview()
+        self.op_slider.valueChanged.connect(_op)
+        orow.addWidget(self.op_slider, 1)
+        orow.addWidget(self.op_lbl)
+        lay.addLayout(orow)
+
         lay.addWidget(self._cap("لون الإبراز"))
         self.accent_row, self.accent_sw = self._swatches(theme.ACCENTS, "accent")
         lay.addLayout(self.accent_row)
@@ -2084,16 +2103,21 @@ class SettingsDialog(QDialog):
 
     def _reset_colors(self, *_):
         """يعيد السمة والألوان كلها إلى الافتراضي (داكن + إبراز كهرماني)."""
-        self._sel.update(theme="dark", dark_base="dark", light_base="light", accent="#FFB020", ok_color="", err_color="")
+        self._sel.update(theme="dark", dark_base="dark", light_base="light", opacity=100, accent="#FFB020", ok_color="", err_color="")
         self.base_combo.blockSignals(True)
         self.base_combo.setCurrentIndex(max(0, self.base_combo.findData("dark")))
         self.base_combo.blockSignals(False)
+        self.op_slider.blockSignals(True)
+        self.op_slider.setValue(100)
+        self.op_lbl.setText("100%")
+        self.op_slider.blockSignals(False)
         self._preview()
 
     def _preview(self):
         """معاينة مباشرة؛ تُلغى عند الإلغاء."""
         s = self._sel
         base = s["light_base"] if s["theme"] == "light" else s["dark_base"]
+        theme.apply_opacity(s["opacity"])
         QApplication.instance().setStyleSheet(
             theme.set_theme(base, s["accent"], s["ok_color"], s["err_color"]))
         for sws, key in ((self.accent_sw, "accent"), (self.ok_sw, "ok_color"), (self.err_sw, "err_color")):

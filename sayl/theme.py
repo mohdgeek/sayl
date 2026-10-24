@@ -129,7 +129,42 @@ def set_theme(base="dark", accent=None, ok=None, err=None):
     return build_qss()
 
 
+OPACITY = 1.0          # شفافية النوافذ (0.5–1.0)
+
+
+def apply_opacity(pct):
+    """شفافية كل النوافذ المفتوحة والجديدة. pct بين 50 و100."""
+    global OPACITY
+    try:
+        OPACITY = max(0.5, min(1.0, int(pct) / 100))
+    except (TypeError, ValueError):
+        OPACITY = 1.0
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is not None:
+        for w in app.topLevelWidgets():
+            if w.isWindow():
+                w.setWindowOpacity(OPACITY)
+
+
+def install_opacity(app):
+    """النوافذ التي تُفتح لاحقًا (نوافذ حوار، تقدّم) ترث الشفافية تلقائيًا."""
+    from PySide6.QtCore import QEvent, QObject
+
+    class _F(QObject):
+        def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Show and hasattr(obj, "isWindow") and obj.isWindow() \
+                    and hasattr(obj, "setWindowOpacity") and abs(obj.windowOpacity() - OPACITY) > 0.001:
+                obj.setWindowOpacity(OPACITY)
+            return False
+
+    f = _F(app)
+    app.installEventFilter(f)
+    return f
+
+
 def apply_config(config):
+    apply_opacity(config["opacity"])
     base = config["light_base"] if config["theme"] == "light" else config["dark_base"]
     if base not in BASES:
         base = "light" if config["theme"] == "light" else "dark"

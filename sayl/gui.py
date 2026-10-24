@@ -995,6 +995,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         setup_tools.log(f"تعذّر تحميل الخط: {e!r}")
     app.setStyleSheet(theme.apply_config(config))
+    app._opacity_filter = theme.install_opacity(app)
     try:
         setup_tools.register_native_host(config)      # يجعل الإضافة تعمل بلا رمز ولا منفذ
     except Exception as e:  # noqa: BLE001
