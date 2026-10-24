@@ -156,6 +156,10 @@ def install_opacity(app):
             if ev.type() == QEvent.Show and hasattr(obj, "isWindow") and obj.isWindow() \
                     and hasattr(obj, "setWindowOpacity") and abs(obj.windowOpacity() - OPACITY) > 0.001:
                 obj.setWindowOpacity(OPACITY)
+            if ev.type() == QEvent.Show and hasattr(obj, "isWindow") and obj.isWindow():
+                from . import winstyle
+                if winstyle.STYLE != "default":
+                    winstyle.apply(obj)
             return False
 
     f = _F(app)
@@ -168,7 +172,10 @@ def apply_config(config):
     base = config["light_base"] if config["theme"] == "light" else config["dark_base"]
     if base not in BASES:
         base = "light" if config["theme"] == "light" else "dark"
-    return set_theme(base, config["accent"], config["ok_color"], config["err_color"])
+    qss = set_theme(base, config["accent"], config["ok_color"], config["err_color"])
+    from . import winstyle
+    winstyle.set_style(config["titlebar"])
+    return qss
 
 
 def build_qss():

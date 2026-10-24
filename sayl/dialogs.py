@@ -1402,7 +1402,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.ready_path = None
         self.config = config
-        self._orig = {k: config[k] for k in ("theme", "dark_base", "light_base", "opacity", "accent", "ok_color", "err_color")}
+        self._orig = {k: config[k] for k in ("theme", "dark_base", "light_base", "opacity", "titlebar", "accent", "ok_color", "err_color")}
         self._sel = dict(self._orig)
         self.setWindowTitle("الإعدادات")
         self.setMinimumWidth(580)
@@ -1998,6 +1998,23 @@ class SettingsDialog(QDialog):
         orow.addWidget(self.op_lbl)
         lay.addLayout(orow)
 
+        lay.addWidget(self._cap("شريط العنوان (ويندوز 10/11)"))
+        from . import winstyle as _ws
+        self.tb_combo = QComboBox()
+        for k, t in _ws.STYLES.items():
+            self.tb_combo.addItem(t, k)
+        self.tb_combo.setCurrentIndex(max(0, self.tb_combo.findData(self._sel["titlebar"])))
+
+        def _tb():
+            self._sel["titlebar"] = self.tb_combo.currentData()
+            self._preview()
+        self.tb_combo.currentIndexChanged.connect(_tb)
+        lay.addWidget(self.tb_combo)
+        tbn = QLabel("«شفاف» و«زجاجي» يعملان على ويندوز 11 فقط؛ في ويندوز 10 يتغيّر اللون فقط.")
+        tbn.setObjectName("Sub")
+        tbn.setWordWrap(True)
+        lay.addWidget(tbn)
+
         lay.addWidget(self._cap("لون الإبراز"))
         self.accent_row, self.accent_sw = self._swatches(theme.ACCENTS, "accent")
         lay.addLayout(self.accent_row)
@@ -2103,7 +2120,7 @@ class SettingsDialog(QDialog):
 
     def _reset_colors(self, *_):
         """يعيد السمة والألوان كلها إلى الافتراضي (داكن + إبراز كهرماني)."""
-        self._sel.update(theme="dark", dark_base="dark", light_base="light", opacity=100, accent="#FFB020", ok_color="", err_color="")
+        self._sel.update(theme="dark", dark_base="dark", light_base="light", opacity=100, titlebar="default", accent="#FFB020", ok_color="", err_color="")
         self.base_combo.blockSignals(True)
         self.base_combo.setCurrentIndex(max(0, self.base_combo.findData("dark")))
         self.base_combo.blockSignals(False)
@@ -2111,6 +2128,9 @@ class SettingsDialog(QDialog):
         self.op_slider.setValue(100)
         self.op_lbl.setText("100%")
         self.op_slider.blockSignals(False)
+        self.tb_combo.blockSignals(True)
+        self.tb_combo.setCurrentIndex(0)
+        self.tb_combo.blockSignals(False)
         self._preview()
 
     def _preview(self):
@@ -2118,12 +2138,15 @@ class SettingsDialog(QDialog):
         s = self._sel
         base = s["light_base"] if s["theme"] == "light" else s["dark_base"]
         theme.apply_opacity(s["opacity"])
+        from . import winstyle
+        winstyle.STYLE = s["titlebar"] if s["titlebar"] in winstyle.STYLES else "default"
         QApplication.instance().setStyleSheet(
             theme.set_theme(base, s["accent"], s["ok_color"], s["err_color"]))
         for sws, key in ((self.accent_sw, "accent"), (self.ok_sw, "ok_color"), (self.err_sw, "err_color")):
             cur = (s[key] or theme.C[{"accent": "accent", "ok_color": "ok", "err_color": "err"}[key]]).upper()
             for b in sws:
                 b.set_selected(b.color.upper() == cur)
+        winstyle.set_style(winstyle.STYLE)
         p = self.parent()
         if p is not None and hasattr(p, "retint"):
             p.retint()

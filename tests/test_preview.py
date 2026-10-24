@@ -157,3 +157,18 @@ def test_window_opacity(tmp_path):
     assert w1.windowOpacity() == 1.0
     app.removeEventFilter(f)
     w1.close(); w2.close()
+
+
+def test_titlebar_plan():
+    from sayl import theme, winstyle
+    theme.set_theme("dark")
+    p = dict(winstyle.plan("theme", theme.C, True))
+    assert p[winstyle.DWMWA_DARK] == 1 and p[winstyle.DWMWA_BACKDROP] == 1
+    assert p[winstyle.DWMWA_CAPTION] == winstyle.colorref(theme.C["side"])
+    assert dict(winstyle.plan("mica", theme.C, True))[winstyle.DWMWA_BACKDROP] == 2
+    assert dict(winstyle.plan("acrylic", theme.C, False))[winstyle.DWMWA_BACKDROP] == 3
+    d = dict(winstyle.plan("default", theme.C, True))
+    assert d[winstyle.DWMWA_CAPTION] == winstyle.COLOR_DEFAULT
+    assert dict(winstyle.plan("bogus", theme.C, True)) == d
+    assert winstyle.colorref("#102030") == 0x302010
+    assert winstyle.apply(object()) is False      # خارج ويندوز: لا يفعل شيئًا
