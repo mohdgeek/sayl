@@ -42,6 +42,25 @@ class Bridge(QObject):
     upd_done = Signal(object, str)  # (مسار الملف الجاهز أو None، رسالة خطأ)
 
 
+def _force_foreground(win):
+    """ويندوز يمنع التطبيقات الخلفية من سحب التركيز، فتظهر النافذة خلف المتصفح.
+    نرفعها للأعلى مرة واحدة ثم نُرجعها نافذة عادية (لا تبقى فوق غيرها)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        hwnd = int(win.winId())
+        flags = 0x0001 | 0x0002 | 0x0040          # NOSIZE | NOMOVE | SHOWWINDOW
+        u.keybd_event(0x12, 0, 0, 0)               # ضغطة Alt تسمح بتغيير النافذة الأمامية
+        u.keybd_event(0x12, 0, 2, 0)
+        u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, flags)    # HWND_TOPMOST
+        u.SetWindowPos(hwnd, -2, 0, 0, 0, 0, flags)    # HWND_NOTOPMOST: تبقى في الأعلى دون تثبيت
+        u.SetForegroundWindow(hwnd)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def looks_downloadable(text):
     t = text.strip()
     if torrent.is_magnet(t) and "\n" not in t:
@@ -648,6 +667,7 @@ class MainWindow(QMainWindow):
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
+        _force_foreground(dlg)
 
     def _show_progress(self, d):
         def after(key):
