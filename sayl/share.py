@@ -39,6 +39,9 @@ class ShareServer:
         self.size = os.path.getsize(path)
         self.hits = 0
         self.sent = 0
+        self.cur = 0            # بايتات الطلب الجاري
+        self.cur_total = 0      # حجم الطلب الجاري
+        self.completed = 0      # عدد مرات وصول الملف كاملًا إلى الهاتف
         self.last = time.monotonic()
         outer = self
 
@@ -68,6 +71,7 @@ class ShareServer:
                         self.send_error(416)
                         return
                 outer.hits += 1
+                outer.cur, outer.cur_total = 0, end - start + 1
                 self.send_response(code)
                 self.send_header("Content-Type", "application/octet-stream")
                 self.send_header("Content-Length", str(end - start + 1))
@@ -88,7 +92,10 @@ class ShareServer:
                             self.wfile.write(chunk)
                             left -= len(chunk)
                             outer.sent += len(chunk)
+                            outer.cur += len(chunk)
                             outer.last = time.monotonic()
+                        if left == 0 and end == outer.size - 1:
+                            outer.completed += 1
                 except (BrokenPipeError, ConnectionError, OSError):
                     pass
 

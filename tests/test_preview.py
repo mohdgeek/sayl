@@ -229,3 +229,18 @@ def test_share_dialog(tmp_path):
     import requests
     with pytest.raises(requests.RequestException):
         requests.get(d.srv.url.replace(d.srv.host, "127.0.0.1"), timeout=2)
+
+
+def test_share_completed_flag(tmp_path):
+    import requests
+    from sayl import share
+    f = tmp_path / "a.bin"
+    f.write_bytes(b"y" * 300000)
+    s = share.ShareServer(str(f), host="127.0.0.1")
+    try:
+        requests.get(s.url, headers={"Range": "bytes=0-99"}, timeout=5)
+        assert s.completed == 0                       # جزء فقط: لم يكتمل
+        requests.get(s.url, timeout=5)
+        assert s.completed == 1 and s.cur == s.cur_total == 300000
+    finally:
+        s.stop()

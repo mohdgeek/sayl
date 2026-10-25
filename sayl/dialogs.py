@@ -92,61 +92,84 @@ def _scroll(widget):
 
 
 class ShareDialog(QDialog):
-    """رمز QR لتنزيل ملف على الهاتف عبر الشبكة المحلية."""
+    """رمز QR لتنزيل ملف على الهاتف عبر الشبكة المحلية، مع شريط تقدّم ورسالة نجاح."""
 
     def __init__(self, path, parent=None):
         super().__init__(parent)
         from . import share
         from PySide6.QtCore import QTimer
         from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QLayout
         self.setWindowTitle("إرسال إلى الهاتف")
-        self.setMinimumWidth(380)
         self.srv = share.ShareServer(path)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(22, 20, 22, 20)
-        lay.setSpacing(12)
+        lay.setSizeConstraint(QLayout.SetFixedSize)          # النافذة بحجم محتواها تمامًا فلا يُقصّ شيء
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(10)
         t = QLabel("إرسال إلى الهاتف")
         t.setObjectName("PageTitle")
         info = QLabel(f"{self.srv.name}  ·  {_fmt_size(self.srv.size)}")
         info.setObjectName("Sub")
+        info.setMaximumWidth(340)
         info.setWordWrap(True)
-        qr = QLabel()
-        qr.setAlignment(Qt.AlignCenter)
         pm = QPixmap()
-        pm.loadFromData(share.qr_png(self.srv.url))
-        qr.setPixmap(pm)
-        qr.setStyleSheet("background:#FFFFFF;border-radius:12px;padding:10px;")
-        how = QLabel("امسح الرمز بكاميرا الهاتف (يجب أن يكون على نفس شبكة الواي فاي). "
-                     "الرابط سري وعشوائي ويتوقف بمجرد إغلاق هذه النافذة. "
-                     "إن سأل جدار حماية ويندوز، اسمح بالوصول للشبكة الخاصة.")
+        pm.loadFromData(share.qr_png(self.srv.url, scale=10))
+        pm = pm.scaled(210, 210, Qt.KeepAspectRatio, Qt.FastTransformation)
+        self.qr = QLabel()
+        self.qr.setPixmap(pm)
+        self.qr.setFixedSize(230, 230)
+        self.qr.setAlignment(Qt.AlignCenter)
+        self.qr.setStyleSheet("background:#FFFFFF;border-radius:12px;")
+        how = QLabel("امسح الرمز بكاميرا الهاتف (على نفس شبكة الواي فاي). "
+                     "الرابط سري ويتوقف عند إغلاق النافذة.")
         how.setObjectName("Sub")
         how.setWordWrap(True)
+        how.setMaximumWidth(340)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(10)
+        self.bar.setFixedWidth(340)
+        self.status = QLabel("بانتظار الهاتف…")
+        self.status.setAlignment(Qt.AlignCenter)
         self.url_edit = QLineEdit(self.srv.url)
         self.url_edit.setReadOnly(True)
         self.url_edit.setLayoutDirection(Qt.LeftToRight)
-        self.status = QLabel("بانتظار الهاتف…")
+        self.url_edit.setFixedWidth(340)
         copy = QPushButton("نسخ الرابط")
         copy.setObjectName("Ghost")
         copy.clicked.connect(lambda: QApplication.clipboard().setText(self.srv.url))
-        close = QPushButton("إيقاف الإرسال")
-        close.setObjectName("Primary")
-        close.clicked.connect(self.accept)
+        self.close_btn = QPushButton("إيقاف الإرسال")
+        self.close_btn.setObjectName("Primary")
+        self.close_btn.clicked.connect(self.accept)
         row = QHBoxLayout()
         row.addWidget(copy)
         row.addStretch(1)
-        row.addWidget(close)
-        for w in (t, info, qr, how, self.url_edit, self.status):
-            lay.addWidget(w)
+        row.addWidget(self.close_btn)
+        lay.addWidget(t)
+        lay.addWidget(info)
+        lay.addWidget(self.qr, 0, Qt.AlignHCenter)
+        lay.addWidget(how)
+        lay.addWidget(self.bar)
+        lay.addWidget(self.status)
+        lay.addWidget(self.url_edit)
         lay.addLayout(row)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)
-        self._timer.start(700)
+        self._timer.start(300)
 
     def _poll(self):
         s = self.srv
-        if s.hits:
-            pct = min(100, int(s.sent * 100 / max(1, s.size * s.hits)))
-            self.status.setText(f"جارٍ الإرسال… {_fmt_size(s.sent)}" + ("" if pct >= 100 else f" ({pct}%)"))
+        if s.completed:
+            self.bar.setValue(100)
+            self.status.setText("✓ تم الإرسال بنجاح" + (f" ({s.completed} مرات)" if s.completed > 1 else ""))
+            self.status.setStyleSheet(f"color:{theme.C['ok']};font-weight:700;")
+            self.close_btn.setText("إغلاق")
+            self.bar.setStyleSheet(f"QProgressBar::chunk{{background:{theme.C['ok']};border-radius:5px;}}")
+        elif s.hits:
+            pct = int(s.cur * 100 / max(1, s.cur_total))
+            self.bar.setValue(pct)
+            self.status.setText(f"جارٍ الإرسال… {pct}% · {_fmt_size(s.cur)} من {_fmt_size(s.cur_total)}")
         if s.idle():
             self.accept()
 
