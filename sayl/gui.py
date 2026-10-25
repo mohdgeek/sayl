@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QInputDialog, 
 from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, LABELS, category_of, ext_of
 from .config import Config
-from .dialogs import (AddDialog, FileConfirmDialog, ScheduleDialog, ShareDialog, ProgressWindow, SettingsDialog,
+from .dialogs import (AddDialog, FileConfirmDialog, LanSendDialog, ScheduleDialog, ShareDialog, ProgressWindow, SettingsDialog,
                       StatsDialog, TorrentConfirmDialog, WelcomeDialog)
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
@@ -38,6 +38,8 @@ class Bridge(QObject):
     hashed = Signal(str, str)    # (اسم الملف، SHA-256)
     confirm = Signal(str, object, str, object)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
     hotkey = Signal()            # من خيط الاختصار العام
+    incoming = Signal(object, object)   # (معلومات ملف وارد، حامل الإجابة) من خادم الاستقبال
+    received = Signal(object)    # اكتمل استلام ملف من جهاز آخر
     upd_found = Signal(object)   # إصدار أحدث متوفر (معلوماته)
     upd_prog = Signal(float)     # تقدّم تنزيل التحديث
     upd_done = Signal(object, str)  # (مسار الملف الجاهز أو None، رسالة خطأ)
@@ -253,6 +255,7 @@ class MainWindow(QMainWindow):
         mm.addSeparator()
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
         mm.addSeparator()
+        mm.addAction("إرسال إلى جهاز آخر…", lambda: LanSendDialog(parent=self).exec())
         mm.addAction("الإحصاءات…", lambda: StatsDialog(self.manager.stats, self).exec())
         mm.addAction("تثبيت إضافة المتصفح…", self.show_welcome)
         mm.addSeparator()
@@ -550,6 +553,8 @@ class MainWindow(QMainWindow):
             m.addAction("فتح الملف", lambda: self._open_file(id))
             if d.kind != "torrent" and d.filename and os.path.isfile(os.path.join(d.folder, d.filename)):
                 m.addAction("إرسال إلى الهاتف…", lambda: self._share(d))
+                m.addAction("إرسال إلى جهاز آخر…",
+                            lambda: LanSendDialog([os.path.join(d.folder, d.filename)], self).exec())
         m.addAction("فتح المجلد", lambda: self._open_folder(id))
         m.addAction("نسخ الرابط", lambda: self._copy(d.url))
         if d.state == COMPLETED:
@@ -571,6 +576,46 @@ class MainWindow(QMainWindow):
     def _copy(self, text):
         self._ignore_clip = text
         QApplication.clipboard().setText(text)
+
+    # ------------------------------------------------------------ استقبال من جهاز آخر
+    def apply_lan(self):
+        from . import lan
+        rx = getattr(self, "_lan_rx", None)
+        if self.config["lan_receive"] and rx is None:
+            try:
+                recv_dir = os.path.join(self.config["download_dir"], "مستلم")
+                self._lan_rx = lan.LanReceiver(recv_dir, lan.device_name(), self._ask_incoming,
+                                               lambda i: self.bridge.received.emit(i))
+            except OSError as e:
+                self._lan_rx = None
+                setup_tools.log(f"تعذّر تشغيل الاستقبال: {e!r}")
+                self.show_banner("تعذّر تفعيل الاستقبال: المنفذ مشغول أو محظور.", None, 8)
+        elif not self.config["lan_receive"] and rx is not None:
+            rx.stop()
+            self._lan_rx = None
+
+    def _ask_incoming(self, info):
+        """يُستدعى من خيط الخادم: نسأل المستخدم في خيط الواجهة وننتظر جوابه."""
+        holder = {"ok": False, "ev": threading.Event()}
+        self.bridge.incoming.emit(info, holder)
+        holder["ev"].wait(60)
+        return holder["ok"]
+
+    def on_incoming(self, info, holder):
+        from .dialogs import _fmt_size
+        self.show_normal()
+        r = QMessageBox.question(self, "ملف وارد",
+                                 f"يريد الجهاز «{info['sender'] or info['addr']}» ({info['addr']}) "
+                                 f"إرسال:\n\n{info['name']}  ({_fmt_size(info['size'])})\n\nهل تقبل الاستلام؟")
+        holder["ok"] = r == QMessageBox.Yes
+        holder["ev"].set()
+
+    def on_received(self, info):
+        self.show_banner(f"تم استلام «{os.path.basename(info['path'])}» من {info['sender'] or info['addr']} "
+                         f"← {os.path.dirname(info['path'])}", None, 20)
+        if self.tray.isVisible() and self.config["notify"]:
+            self.tray.showMessage("سيل", "تم استلام " + os.path.basename(info["path"]),
+                                  QSystemTrayIcon.Information, 4000)
 
     def _share(self, d):
         try:
@@ -828,6 +873,7 @@ class MainWindow(QMainWindow):
             dlg.apply()
             self.manager.apply_settings()
             self.apply_hotkey()
+            self.apply_lan()
             QApplication.instance().setStyleSheet(theme.apply_config(self.config))
             self.retint()
             self.refresh(force=True)
@@ -979,6 +1025,8 @@ class MainWindow(QMainWindow):
             self.quit()
 
     def quit(self):
+        if getattr(self, "_lan_rx", None):
+            self._lan_rx.stop()
         self.manager.shutdown()
         self.tray.hide()
         QApplication.quit()
@@ -1022,6 +1070,9 @@ def main():
     bridge.added.connect(win.on_remote_add)
     bridge.confirm.connect(win.open_confirm)
     bridge.hotkey.connect(win.on_hotkey)
+    bridge.incoming.connect(win.on_incoming)
+    bridge.received.connect(win.on_received)
+    win.apply_lan()
     win.hk = GlobalHotkey(lambda: bridge.hotkey.emit())
     win.apply_hotkey()
     try:

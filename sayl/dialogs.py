@@ -79,6 +79,12 @@ def _render_pdf_first_page(data):
         return None
 
 
+def _bar_style(chunk=None):
+    c = theme.C
+    return (f"QProgressBar{{background:{c['track']};border:none;border-radius:5px;}}"
+            f"QProgressBar::chunk{{background:{chunk or c['accent']};border-radius:5px;}}")
+
+
 def _scroll(widget):
     """يلفّ صفحة إعدادات بشريط تمرير كي لا تتجاوز النافذة حجم الشاشة."""
     from PySide6.QtWidgets import QScrollArea
@@ -130,6 +136,7 @@ class ShareDialog(QDialog):
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(10)
         self.bar.setFixedWidth(340)
+        self.bar.setStyleSheet(_bar_style())
         self.status = QLabel("بانتظار الهاتف…")
         self.status.setAlignment(Qt.AlignCenter)
         self.url_edit = QLineEdit(self.srv.url)
@@ -165,7 +172,7 @@ class ShareDialog(QDialog):
             self.status.setText("✓ تم الإرسال بنجاح" + (f" ({s.completed} مرات)" if s.completed > 1 else ""))
             self.status.setStyleSheet(f"color:{theme.C['ok']};font-weight:700;")
             self.close_btn.setText("إغلاق")
-            self.bar.setStyleSheet(f"QProgressBar::chunk{{background:{theme.C['ok']};border-radius:5px;}}")
+            self.bar.setStyleSheet(_bar_style(theme.C["ok"]))
         elif s.hits:
             pct = int(s.cur * 100 / max(1, s.cur_total))
             self.bar.setValue(pct)
@@ -177,6 +184,197 @@ class ShareDialog(QDialog):
         self._timer.stop()
         self.srv.stop()
         super().done(r)
+
+
+class _LanBus(QObject):
+    """وسيط إشارات تحتفظ به الخيوط الخلفية بنفسها، فلا تُرسل إلى نافذة حُذفت (يسبب انهيارًا)."""
+    scanned = Signal(object)
+    prog = Signal(int, int, str)
+    fin = Signal(str, bool)
+
+
+class LanSendDialog(QDialog):
+    """إرسال ملفات إلى جهاز آخر يعمل عليه سيل (نفس الشبكة)."""
+
+    def __init__(self, paths=None, parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QLayout
+        self.setWindowTitle("إرسال إلى جهاز آخر")
+        self.paths = list(paths or [])
+        self._cancel = threading.Event()
+        self._busy = False
+        lay = QVBoxLayout(self)
+        lay.setSizeConstraint(QLayout.SetFixedSize)
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(10)
+        t = QLabel("إرسال إلى جهاز آخر")
+        t.setObjectName("PageTitle")
+        self.files_lbl = QLabel()
+        self.files_lbl.setObjectName("Sub")
+        self.files_lbl.setWordWrap(True)
+        self.files_lbl.setFixedWidth(380)
+        pick = QPushButton("اختيار ملفات…")
+        pick.setObjectName("Ghost")
+        pick.clicked.connect(self._pick)
+        self.devs = QListWidget()
+        self.devs.setFixedSize(380, 120)
+        self.scan_btn = QPushButton("بحث عن الأجهزة")
+        self.scan_btn.setObjectName("Ghost")
+        self.scan_btn.clicked.connect(self._scan)
+        self.manual = QLineEdit()
+        self.manual.setPlaceholderText("أو اكتب عنوان الجهاز، مثل 192.168.1.20")
+        self.manual.setLayoutDirection(Qt.LeftToRight)
+        self.manual.setFixedWidth(380)
+        hint = QLabel("على الجهاز الآخر: الإعدادات ← عام ← فعّل «استقبال الملفات من أجهزة سيل الأخرى». "
+                      "سيسألك ذلك الجهاز الموافقة قبل الاستلام. النقل غير مشفّر، فاستخدمه على شبكتك الموثوقة فقط.")
+        hint.setObjectName("Sub")
+        hint.setWordWrap(True)
+        hint.setFixedWidth(380)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedSize(380, 10)
+        self.bar.setStyleSheet(_bar_style())
+        self.status = QLabel("")
+        self.status.setAlignment(Qt.AlignCenter)
+        self.status.setWordWrap(True)
+        self.status.setFixedWidth(380)
+        self.send_btn = QPushButton("إرسال")
+        self.send_btn.setObjectName("Primary")
+        self.send_btn.clicked.connect(self._send)
+        close = QPushButton("إغلاق")
+        close.setObjectName("Ghost")
+        close.clicked.connect(self.reject)
+        row = QHBoxLayout()
+        row.addWidget(pick)
+        row.addWidget(self.scan_btn)
+        row.addStretch(1)
+        row2 = QHBoxLayout()
+        row2.addWidget(close)
+        row2.addStretch(1)
+        row2.addWidget(self.send_btn)
+        for w in (t, self.files_lbl):
+            lay.addWidget(w)
+        lay.addLayout(row)
+        for w in (self.devs, self.manual, hint, self.bar, self.status):
+            lay.addWidget(w)
+        lay.addLayout(row2)
+        self._bus = _LanBus()
+        self._bus.scanned.connect(self._show_devs)
+        self._bus.prog.connect(self._on_prog)
+        self._bus.fin.connect(self._on_fin)
+        self._refresh_files()
+        self._scan()
+
+    def _refresh_files(self):
+        if not self.paths:
+            self.files_lbl.setText("لم تختر ملفات بعد.")
+        else:
+            total = sum(os.path.getsize(p) for p in self.paths if os.path.isfile(p))
+            first = os.path.basename(self.paths[0])
+            extra = f" و{len(self.paths) - 1} ملفات أخرى" if len(self.paths) > 1 else ""
+            self.files_lbl.setText(f"{first}{extra}  ·  {_fmt_size(total)}")
+
+    def _pick(self):
+        fs, _ = QFileDialog.getOpenFileNames(self, "اختر الملفات للإرسال")
+        if fs:
+            self.paths = fs
+            self._refresh_files()
+
+    def _scan(self):
+        from . import lan
+        self.scan_btn.setEnabled(False)
+        self.devs.clear()
+        self.devs.addItem("جارٍ البحث…")
+
+        bus = self._bus
+
+        def work():
+            try:
+                bus.scanned.emit(lan.scan())
+            except Exception:  # noqa: BLE001
+                bus.scanned.emit([])
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_devs(self, found):
+        self.scan_btn.setEnabled(True)
+        self.devs.clear()
+        if not found:
+            self.devs.addItem("لا توجد أجهزة. تأكد من تفعيل الاستقبال هناك، أو اكتب العنوان يدويًا.")
+            return
+        for d in found:
+            it = QListWidgetItem(f"{d['name']}   ({d['ip']})")
+            it.setData(Qt.UserRole, d)
+            self.devs.addItem(it)
+        self.devs.setCurrentRow(0)
+
+    def _target(self):
+        from . import lan
+        it = self.devs.currentItem()
+        d = it.data(Qt.UserRole) if it else None
+        if d:
+            return d["ip"], d["port"]
+        m = self.manual.text().strip()
+        if m:
+            host, _, port = m.partition(":")
+            return host, int(port) if port.isdigit() else lan.PORT
+        return None
+
+    def _send(self):
+        if self._busy:
+            self._cancel.set()
+            return
+        tgt = self._target()
+        files = [p for p in self.paths if os.path.isfile(p)]
+        if not files:
+            self.status.setText("اختر ملفًا أولًا.")
+            return
+        if not tgt:
+            self.status.setText("اختر جهازًا من القائمة أو اكتب عنوانه.")
+            return
+        from . import lan
+        self._busy = True
+        self._cancel.clear()
+        self.send_btn.setText("إلغاء")
+        self.bar.setValue(0)
+        self.bar.setStyleSheet(_bar_style())
+        self.status.setStyleSheet("")
+        self.status.setText("بانتظار موافقة الجهاز الآخر…")
+
+        bus, cancel = self._bus, self._cancel
+
+        def work():
+            ok_count = 0
+            try:
+                for i, p in enumerate(files, 1):
+                    tag = f"{i}/{len(files)} · {os.path.basename(p)}"
+                    res = lan.send_file(tgt[0], tgt[1], p, lambda s, t, tag=tag: bus.prog.emit(s, t, tag),
+                                        cancel=cancel)
+                    ok_count += 1
+                bus.fin.emit(f"✓ تم إرسال {ok_count} ملف بنجاح" + (" (تم التحقق من سلامة الملف)"
+                                                                   if res["verified"] else ""), True)
+            except lan.SendError as e:
+                bus.fin.emit(str(e), False)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_prog(self, sent, total, tag):
+        pct = int(sent * 100 / max(1, total))
+        self.bar.setValue(pct)
+        self.status.setText(f"جارٍ الإرسال… {pct}%  ·  {tag}")
+
+    def _on_fin(self, msg, ok):
+        self._busy = False
+        self.send_btn.setText("إرسال")
+        self.status.setText(msg)
+        c = theme.C["ok"] if ok else theme.C["err"]
+        self.status.setStyleSheet(f"color:{c};font-weight:700;")
+        if ok:
+            self.bar.setValue(100)
+            self.bar.setStyleSheet(_bar_style(c))
+
+    def reject(self):
+        self._cancel.set()
+        super().reject()
 
 
 class _PreviewFetch(QObject):
@@ -1699,6 +1897,9 @@ class SettingsDialog(QDialog):
         f.addRow("", self.clip)
         f.addRow("", self.notify)
         f.addRow("", self.autostart)
+        self.lan_rx = QCheckBox("استقبال الملفات من أجهزة سيل الأخرى على نفس الشبكة (مع طلب موافقتك على كل ملف)")
+        self.lan_rx.setChecked(bool(c["lan_receive"]))
+        f.addRow("", self.lan_rx)
         self.hk_on = QCheckBox("اختصار عام لإضافة رابط من أي برنامج")
         self.hk_on.setChecked(bool(c["hotkey_enabled"]))
         self.hk_key = QLineEdit(str(c["hotkey"]))
@@ -2285,6 +2486,7 @@ class SettingsDialog(QDialog):
         c["warn_duplicates"] = self.dups.isChecked()
         c["clipboard_watch"] = self.clip.isChecked()
         c["notify"] = self.notify.isChecked()
+        c["lan_receive"] = self.lan_rx.isChecked()
         c["watch_enabled"] = self.watch.isChecked()
         c["watch_folder"] = self.watch_dir.text().strip()
         c["schedule_enabled"] = self.sched.isChecked()

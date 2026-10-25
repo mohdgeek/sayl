@@ -244,3 +244,74 @@ def test_share_completed_flag(tmp_path):
         assert s.completed == 1 and s.cur == s.cur_total == 300000
     finally:
         s.stop()
+
+
+def test_lan_transfer_and_refusal(tmp_path):
+    import os
+    from sayl import lan
+    src = tmp_path / "تقرير 1.bin"
+    src.write_bytes(os.urandom(1_500_000))
+    got = []
+    r = lan.LanReceiver(str(tmp_path / "in"), "PC-B", lambda i: True, got.append, port=0, discover_port=47691)
+    try:
+        found = lan.scan(targets=["127.0.0.1"], port=47691, timeout=1)
+        assert found and found[0]["name"] == "PC-B" and found[0]["port"] == r.port
+        prog = []
+        res = lan.send_file("127.0.0.1", r.port, str(src), lambda s, t: prog.append((s, t)))
+        assert res["verified"] and prog[-1] == (1_500_000, 1_500_000)
+        assert (tmp_path / "in" / "تقرير 1.bin").read_bytes() == src.read_bytes()
+        res2 = lan.send_file("127.0.0.1", r.port, str(src))          # نفس الاسم: لا يُستبدل
+        assert res2["name"] != "تقرير 1.bin" and len(os.listdir(tmp_path / "in")) == 2
+        assert not [f for f in os.listdir(tmp_path / "in") if f.endswith(".sayl-part")]
+        # اسم خبيث لا يخرج من المجلد
+        evil = tmp_path / "x.bin"
+        evil.write_bytes(b"1")
+        import http.client, json
+        c = http.client.HTTPConnection("127.0.0.1", r.port)
+        c.request("POST", "/offer", json.dumps({"name": "../../evil.txt", "size": 1}))
+        tok = json.loads(c.getresponse().read())["token"]
+        c = http.client.HTTPConnection("127.0.0.1", r.port)
+        c.request("PUT", "/send/" + tok, b"1", {"Content-Length": "1"})
+        out = json.loads(c.getresponse().read())
+        assert os.path.dirname(os.path.join(str(tmp_path / "in"), out["name"])) == str(tmp_path / "in")
+        assert not (tmp_path / "evil.txt").exists()
+        c = http.client.HTTPConnection("127.0.0.1", r.port)           # رمز مستعمل يُرفض
+        c.request("PUT", "/send/" + tok, b"1", {"Content-Length": "1"})
+        assert c.getresponse().status == 403
+    finally:
+        r.stop()
+    r2 = lan.LanReceiver(str(tmp_path / "in2"), "PC-C", lambda i: False, port=0, discover_port=47692)
+    try:
+        with pytest.raises(lan.SendError, match="رفض"):
+            lan.send_file("127.0.0.1", r2.port, str(src))
+        assert not os.path.exists(tmp_path / "in2") or not os.listdir(tmp_path / "in2")
+    finally:
+        r2.stop()
+    with pytest.raises(lan.SendError):
+        lan.send_file("127.0.0.1", 9, str(src))                         # لا أحد يستمع
+
+
+def test_lan_dialog_sends(tmp_path):
+    import os, time
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from sayl import lan
+    from sayl.dialogs import LanSendDialog
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"z" * 200000)
+    r = lan.LanReceiver(str(tmp_path / "in"), "PC-B", lambda i: True, port=0, discover_port=47693)
+    try:
+        d = LanSendDialog([str(src)])
+        d.manual.setText(f"127.0.0.1:{r.port}")
+        d.devs.clear()
+        d._send()
+        t0 = time.time()
+        while d._busy and time.time() - t0 < 10:
+            app.processEvents()
+            time.sleep(0.02)
+        app.processEvents()
+        assert "✓" in d.status.text() and d.bar.value() == 100
+        d.reject()
+    finally:
+        r.stop()
