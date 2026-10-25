@@ -608,7 +608,7 @@ class DownloadManager:
                     last_save = now
             except Exception:  # noqa: BLE001
                 pass
-            time.sleep(0.4)
+            time.sleep(0.2)
 
     def _watch_tick(self):
         c = self.config

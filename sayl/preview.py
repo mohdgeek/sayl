@@ -7,9 +7,9 @@ import zipfile
 import requests
 
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
-MAX_IMAGE = 12 * 1024 * 1024
-MAX_PDF = 20 * 1024 * 1024
-MAX_ZIP_FULL = 30 * 1024 * 1024         # إن لم يدعم الخادم Range نقرأ كامل الملف حتى هذا الحجم
+MAX_IMAGE = 6 * 1024 * 1024
+MAX_PDF = 8 * 1024 * 1024
+MAX_ZIP_FULL = 8 * 1024 * 1024         # إن لم يدعم الخادم Range نقرأ كامل الملف حتى هذا الحجم
 UA = "Mozilla/5.0 Sayl/1.0"
 
 
@@ -68,12 +68,14 @@ class RangeFile(io.RawIOBase):
         return len(d)
 
 
-def _get_all(url, headers, session, limit):
+def _get_all(url, headers, session, limit, cancel=None):
     with session.get(url, headers=headers, stream=True, timeout=(10, 25)) as r:
         if r.status_code >= 400:
             raise IOError(f"HTTP {r.status_code}")
         buf = bytearray()
         for chunk in r.iter_content(64 * 1024):
+            if cancel is not None and cancel.is_set():
+                raise IOError("أُلغيت المعاينة")      # أُغلقت النافذة: لا نستهلك الشبكة بعد الآن
             buf += chunk
             if len(buf) > limit:
                 raise IOError("الملف أكبر من حد المعاينة")
@@ -86,7 +88,7 @@ def _zip_entries(zf):
             "entries": [(i.filename, i.file_size) for i in infos[:300]]}
 
 
-def fetch(url, name, size=None, headers=None, session=None):
+def fetch(url, name, size=None, headers=None, session=None, cancel=None):
     """يعيد {"kind": "image"|"pdf", "data": bytes} أو {"kind": "zip", ...} أو None إن لم تتوفر معاينة."""
     kind = kind_for(name, size)
     if not kind:
@@ -94,9 +96,9 @@ def fetch(url, name, size=None, headers=None, session=None):
     s = session or requests.Session()
     h = {"User-Agent": UA, **(headers or {})}
     if kind == "image":
-        return {"kind": "image", "data": _get_all(url, h, s, MAX_IMAGE)}
+        return {"kind": "image", "data": _get_all(url, h, s, MAX_IMAGE, cancel)}
     if kind == "pdf":
-        data = _get_all(url, h, s, MAX_PDF)
+        data = _get_all(url, h, s, MAX_PDF, cancel)
         return {"kind": "pdf", "data": data} if data[:5] == b"%PDF-" else None
     # zip
     if size:
@@ -106,6 +108,6 @@ def fetch(url, name, size=None, headers=None, session=None):
         except (IOError, zipfile.BadZipFile):
             if size > MAX_ZIP_FULL:
                 return None
-    data = _get_all(url, h, s, MAX_ZIP_FULL)
+    data = _get_all(url, h, s, MAX_ZIP_FULL, cancel)
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         return {"kind": "zip", **_zip_entries(z)}

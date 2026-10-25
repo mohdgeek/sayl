@@ -626,7 +626,8 @@ class Download:
         if self.size is not None and os.path.getsize(self._tmp) != self.size and self.resumable:
             raise IOError("حجم الملف النهائي لا يطابق الحجم المتوقع")
         target = self.dest_dir
-        if self.subfolder:
+        already = os.path.basename(os.path.normpath(self.dest_dir)) in LABELS.values()
+        if self.subfolder and not already:        # لا نكرّر مجلد النوع داخل مجلد النوع نفسه
             target = os.path.join(self.dest_dir, LABELS[category_of(self.filename)])
             os.makedirs(target, exist_ok=True)
         final = unique_path(os.path.join(target, self.filename))

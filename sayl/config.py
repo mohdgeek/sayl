@@ -25,6 +25,7 @@ DEFAULTS = {
     "video_quality": 0,        # 0 = أفضل جودة، أو ارتفاع بالبكسل (1080/720/480)
     "ffmpeg_path": "",         # اتركه فارغًا للبحث التلقائي في PATH
     # المظهر
+    "preview": True,           # معاينة الصورة/PDF/zip في نافذة معلومات الملف
     "auto_checksum": True,     # البحث عن البصمة الرسمية والتحقق منها تلقائيًا بعد التحميل
     "lan_receive": False,      # استقبال ملفات من أجهزة سيل أخرى على نفس الشبكة
     "titlebar": "default",     # شريط العنوان: default | theme | mica | acrylic (ويندوز)

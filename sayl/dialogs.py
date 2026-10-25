@@ -379,12 +379,19 @@ class LanSendDialog(QDialog):
 
 class _PreviewFetch(QObject):
     done = Signal(object)
+    dups = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.cancel = threading.Event()
 
     def run(self, url, name, size, headers):
+        cancel = self.cancel
+
         def work():
             try:
                 from . import preview
-                self.done.emit(preview.fetch(url, name, size, headers))
+                self.done.emit(preview.fetch(url, name, size, headers, cancel=cancel))
             except Exception:  # noqa: BLE001
                 self.done.emit(None)
         threading.Thread(target=work, daemon=True).start()
@@ -854,6 +861,7 @@ class FileConfirmDialog(QDialog):
         self._headers = headers
         self._pfetch = _PreviewFetch()
         self._pfetch.done.connect(self._show_preview)
+        self._pfetch.dups.connect(self._show_dupes)
 
         self.cat.currentIndexChanged.connect(self._cat_changed)
         self.url.setCursorPosition(0)
@@ -907,7 +915,7 @@ class FileConfirmDialog(QDialog):
         self.size_lbl.setText(_fmt_size(size) if size else "الحجم غير معروف")
         self._check_dupes(name, size)
         from . import preview as _pv
-        if name and _pv.kind_for(name, size):
+        if name and self.config["preview"] and _pv.kind_for(name, size):
             self.pv_title.setText("جارٍ تحميل المعاينة…")
             self.pv_img.clear()
             self.pv_list.hide()
@@ -916,10 +924,18 @@ class FileConfirmDialog(QDialog):
 
     def _check_dupes(self, name, size):
         from . import dupes
-        try:
-            hits = dupes.find(self.config, name, size, [os.path.dirname(self.path.text())])
-        except Exception:  # noqa: BLE001
-            hits = []
+        extra = [os.path.dirname(self.path.text())]
+        bus = self._pfetch
+
+        def work():
+            try:
+                hits = dupes.find(self.config, name, size, extra)
+            except Exception:  # noqa: BLE001
+                hits = []
+            bus.dups.emit(hits)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_dupes(self, hits):
         if not hits:
             self.dup_lbl.setVisible(False)
             return
@@ -969,6 +985,10 @@ class FileConfirmDialog(QDialog):
             self._edited_path = True
             self.path.setText(f)
             self.remember_path.setText(os.path.dirname(f))
+
+    def done(self, r):
+        self._pfetch.cancel.set()                # لا تُكمل المعاينة التنزيل بعد إغلاق النافذة
+        super().done(r)
 
     def _finish(self, start):
         self.start = start
@@ -1921,6 +1941,9 @@ class SettingsDialog(QDialog):
         f.addRow("", self.clip)
         f.addRow("", self.notify)
         f.addRow("", self.autostart)
+        self.prev_cb = QCheckBox("معاينة الصور وPDF ومحتويات zip في نافذة معلومات الملف")
+        self.prev_cb.setChecked(bool(c["preview"]))
+        f.addRow("", self.prev_cb)
         self.auto_cs = QCheckBox("التحقق التلقائي من سلامة الملف بالبحث عن بصمته الرسمية بعد التحميل")
         self.auto_cs.setChecked(bool(c["auto_checksum"]))
         f.addRow("", self.auto_cs)
@@ -2515,6 +2538,7 @@ class SettingsDialog(QDialog):
         c["notify"] = self.notify.isChecked()
         c["lan_receive"] = self.lan_rx.isChecked()
         c["auto_checksum"] = self.auto_cs.isChecked()
+        c["preview"] = self.prev_cb.isChecked()
         c["watch_enabled"] = self.watch.isChecked()
         c["watch_folder"] = self.watch_dir.text().strip()
         c["schedule_enabled"] = self.sched.isChecked()

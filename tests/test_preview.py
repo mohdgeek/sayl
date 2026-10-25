@@ -471,8 +471,34 @@ def test_confirm_dialog_shows_duplicate(tmp_path):
     (tmp_path / "برامج").mkdir()
     (tmp_path / "برامج" / "setup.exe").write_bytes(b"9" * 300000)
     d = FileConfirmDialog(cfg, "http://127.0.0.1:9/setup.exe", {}, None)
+    import time
+
+    def settle(cond):
+        t0 = time.time()
+        while time.time() - t0 < 5 and not cond():
+            app.processEvents()
+            time.sleep(0.02)
     d._on_probe("setup.exe", 300000)
+    settle(lambda: not d.dup_lbl.isHidden())
     assert not d.dup_lbl.isHidden() and "setup.exe" in d.dup_lbl.text() and "مسبقًا" in d.dup_lbl.text()
     d._on_probe("setup.exe", 12345)
+    settle(lambda: d.dup_lbl.isHidden())
     assert d.dup_lbl.isHidden()
     d.reject()
+    assert d._pfetch.cancel.is_set()                     # أُلغيت المعاينة بإغلاق النافذة
+
+
+def test_no_nested_type_folder(tmp_path):
+    from sayl.categories import LABELS
+    from sayl.engine import Download
+    d = Download("http://x/a.exe", str(tmp_path / LABELS["apps"]))
+    d.filename = "a.exe"
+    d.subfolder = True
+    (tmp_path / LABELS["apps"]).mkdir()
+    d._tmp = str(tmp_path / LABELS["apps"] / "a.exe.part")
+    d.resumable = False
+    d.size = None
+    (tmp_path / LABELS["apps"] / "a.exe.part").write_bytes(b"1")
+    d._finish()
+    assert (tmp_path / LABELS["apps"] / "a.exe").exists()
+    assert not (tmp_path / LABELS["apps"] / LABELS["apps"]).exists()
