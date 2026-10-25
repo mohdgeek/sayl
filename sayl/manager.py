@@ -13,7 +13,7 @@ import urllib.parse
 from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, Download, RateLimiter, make_download)
-from . import checksums, engine, rules, torrent
+from . import checksums, dupes, engine, rules, torrent
 from .categories import LABELS, category_of
 from .torrent import is_magnet
 from .media import MediaDownload, available as media_available, is_media_url
@@ -368,6 +368,7 @@ class DownloadManager:
         self._count_completed()
         self._auto_retry()
         self._auto_checksum()
+        self._check_dupes()
         with self._lock:
             if not is_open:     # أغلقت النافذة: أوقف ما لم يُطلب يدويًا وأعده للطابور
                 capped = self.capped()
@@ -494,6 +495,30 @@ class DownloadManager:
             if exp and d.state == COMPLETED and getattr(d, "hash_state", None) is None:
                 d.hash_state = "checking"
                 threading.Thread(target=self._verify_one, args=(d, exp), daemon=True).start()
+
+    def _check_dupes(self):
+        """عند معرفة اسم الملف وحجمه (أول التحميل) نبحث عن نسخة منه على القرص وننبّه المستخدم."""
+        for d in list(self.items.values()):
+            if (d.state in (DOWNLOADING, COMPLETED) and d.size and d.filename and d.kind in ("http", "media")
+                    and not getattr(d, "_dup_checked", False)):
+                d._dup_checked = True
+                threading.Thread(target=self._find_dup, args=(d,), daemon=True, name="dup-" + d.id).start()
+
+    def _find_dup(self, d):
+        try:
+            mine = os.path.join(d.folder, d.filename)
+            hits = dupes.find(self.config, d.filename, d.size, [d.folder], skip=mine)
+            hits += [(it.folder + os.sep + it.filename, "same") for it in list(self.items.values())
+                     if it is not d and it.state == COMPLETED and it.size == d.size and it.filename
+                     and it.filename.lower() == d.filename.lower()
+                     and os.path.isfile(os.path.join(it.folder, it.filename))
+                     and os.path.join(it.folder, it.filename) != mine]
+        except Exception:  # noqa: BLE001
+            return
+        if hits:
+            d.dup_of, d.dup_kind = hits[0]
+            self.events.append(("⚠ لديك هذا الملف مسبقًا: " if d.dup_kind == "same"
+                                else "ℹ يوجد ملف بنفس الحجم (ربما هو نفسه): ") + d.dup_of)
 
     def _auto_checksum(self):
         """للتحميلات العادية المكتملة بلا بصمة: نبحث عن البصمة الرسمية تلقائيًا ثم تتحقق _verify_pending."""
@@ -690,6 +715,7 @@ class DownloadManager:
             d.start_at = e.get("start_at")
             d.hash_state = e.get("hash_state")
             d.hash_auto = bool(e.get("hash_auto"))
+            d._dup_checked = state == COMPLETED
             d._cs_tried = state == COMPLETED          # لا نبحث عن بصمات لما اكتمل في جلسات سابقة
             d.subfolder = e.get("subfolder", False)
             d.note = e.get("note", "")

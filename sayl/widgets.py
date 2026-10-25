@@ -265,7 +265,7 @@ class DownloadRow(QFrame):
         key = (st, name, round(d.progress, 3), int(d.speed // 1024), d.size, d.error, cat,
                getattr(d, "peers", 0), getattr(d, "stage", ""), getattr(d, "hash_state", None),
                int(max(0, (getattr(d, "retry_at", None) or 0) - time.time()) // 3) if st == ERROR else 0,
-               getattr(d, "start_at", None))
+               getattr(d, "start_at", None), getattr(d, "dup_of", None))
         if key == self._last and not force:
             return
         self._last = key
@@ -284,7 +284,9 @@ class DownloadRow(QFrame):
             parts = [ltr(fmt_size(d.size)) if d.size else "", LABELS[cat], ltr(host_of(d.url)),
                      {"ok": "✓ البصمة مطابقة", "bad": "⚠ البصمة لا تطابق",
                       "checking": "جارٍ التحقق من البصمة…"}.get(hs, "")
-                     + (" (تلقائيًا)" if hs in ("ok", "bad") and getattr(d, "hash_auto", False) else "")]
+                     + (" (تلقائيًا)" if hs in ("ok", "bad") and getattr(d, "hash_auto", False) else ""),
+                     ("⚠ مكرر" if getattr(d, "dup_kind", "") == "same" else "ℹ بنفس حجم ملف موجود")
+                     if getattr(d, "dup_of", None) else ""]
             self._meta(" · ".join(p for p in parts if p), False)
             self.speed.setText("")
             self.eta.setText("")
@@ -330,7 +332,10 @@ class DownloadRow(QFrame):
             if d.kind == "torrent" and d.stage:
                 self._meta(d.stage, False)
             else:
-                self._meta(f"{ltr(fmt_size(d.downloaded))} من {ltr(fmt_size(d.size))}{extra}", False)
+                dup = ""
+                if getattr(d, "dup_of", None):
+                    dup = " · ⚠ مكرر" if getattr(d, "dup_kind", "") == "same" else " · ℹ بنفس حجم ملف موجود"
+                self._meta(f"{ltr(fmt_size(d.downloaded))} من {ltr(fmt_size(d.size))}{extra}{dup}", False)
             self.speed.setText(fmt_speed(d.speed) if running and d.speed else "")
             e = fmt_eta(d.eta)
             self.eta.setText(f"متبقي {e}" if e else "")

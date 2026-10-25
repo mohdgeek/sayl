@@ -4,22 +4,36 @@ import os
 MAX_ENTRIES = 20000
 
 
-def _dirs(config, extra=()):
-    base = config["download_dir"]
+def _walk(base, depth):
     out = [base]
+    if depth <= 0:
+        return out
     try:
         for e in os.scandir(base):
-            if e.is_dir(follow_symlinks=False) and not e.name.startswith("."):
-                out.append(e.path)
+            if e.is_dir(follow_symlinks=False) and not e.name.startswith(".") and len(out) < 400:
+                out += _walk(e.path, depth - 1)
     except OSError:
         pass
-    for d in list(extra) + list((config["category_dirs"] or {}).values()):
-        if d and os.path.isdir(d) and d not in out:
-            out.append(d)
     return out
 
 
-def find(config, name, size, extra_dirs=()):
+def _dirs(config, extra=()):
+    """مجلد التنزيلات (حتى مستويين من المجلدات الفرعية) + كل مجلد استُخدم للحفظ سابقًا أو في القواعد."""
+    out = []
+    for d in _walk(config["download_dir"], 2):
+        if d not in out:
+            out.append(d)
+    extras = list(extra) + list((config["category_dirs"] or {}).values())
+    extras += [r.get("dest") or r.get("folder") or "" for r in (config["rules"] or []) if isinstance(r, dict)]
+    for d in extras:
+        if d and os.path.isdir(d):
+            for w in _walk(d, 1):
+                if w not in out:
+                    out.append(w)
+    return out
+
+
+def find(config, name, size, extra_dirs=(), skip=None):
     """يعيد [(المسار، 'same' أو 'size')] لأفضل ما وُجد (حتى 3). 'same' = اسم وحجم متطابقان."""
     if not size or size < 50 * 1024:
         return []
@@ -39,6 +53,8 @@ def find(config, name, size, extra_dirs=()):
                     if not e.is_file(follow_symlinks=False) or e.stat().st_size != size:
                         continue
                 except OSError:
+                    continue
+                if skip and os.path.abspath(e.path) == os.path.abspath(skip):
                     continue
                 en, ee = os.path.splitext(e.name)
                 same = e.name.lower() == (name or "").lower() or (

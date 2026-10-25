@@ -423,3 +423,56 @@ def test_backup_roundtrip(tmp_path):
     assert backup.restore_backup(m2, cfg2, b) == 0               # لا تكرار
     m.shutdown()
     m2.shutdown()
+
+
+def test_manager_flags_duplicate_while_downloading(tmp_path):
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from sayl.manager import DownloadManager
+    body = b"q" * 400000
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        cfg = Config(str(tmp_path / "c.json"))
+        cfg["download_dir"] = str(tmp_path / "dl")
+        cfg["auto_checksum"] = False
+        old = tmp_path / "dl" / "قديم"
+        old.mkdir(parents=True)
+        (old / "pkg.bin").write_bytes(body)                     # نسخة سابقة في مجلد فرعي
+        m = DownloadManager(cfg, state_path=str(tmp_path / "s.json"))
+        d = m.add(f"http://127.0.0.1:{srv.server_port}/pkg.bin", dest_dir=str(tmp_path / "dl" / "جديد"))
+        t0 = time.time()
+        while time.time() - t0 < 15 and not getattr(d, "dup_of", None):
+            time.sleep(0.1)
+        assert d.dup_of.endswith("pkg.bin") and d.dup_kind == "same"
+        m.shutdown()
+    finally:
+        srv.shutdown()
+
+
+def test_confirm_dialog_shows_duplicate(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from sayl.dialogs import FileConfirmDialog
+    cfg = Config(str(tmp_path / "c.json"))
+    cfg["download_dir"] = str(tmp_path)
+    (tmp_path / "برامج").mkdir()
+    (tmp_path / "برامج" / "setup.exe").write_bytes(b"9" * 300000)
+    d = FileConfirmDialog(cfg, "http://127.0.0.1:9/setup.exe", {}, None)
+    d._on_probe("setup.exe", 300000)
+    assert not d.dup_lbl.isHidden() and "setup.exe" in d.dup_lbl.text() and "مسبقًا" in d.dup_lbl.text()
+    d._on_probe("setup.exe", 12345)
+    assert d.dup_lbl.isHidden()
+    d.reject()
