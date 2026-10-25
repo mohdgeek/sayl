@@ -91,6 +91,71 @@ def _scroll(widget):
     return sa
 
 
+class ShareDialog(QDialog):
+    """رمز QR لتنزيل ملف على الهاتف عبر الشبكة المحلية."""
+
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        from . import share
+        from PySide6.QtCore import QTimer
+        from PySide6.QtGui import QPixmap
+        self.setWindowTitle("إرسال إلى الهاتف")
+        self.setMinimumWidth(380)
+        self.srv = share.ShareServer(path)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setSpacing(12)
+        t = QLabel("إرسال إلى الهاتف")
+        t.setObjectName("PageTitle")
+        info = QLabel(f"{self.srv.name}  ·  {_fmt_size(self.srv.size)}")
+        info.setObjectName("Sub")
+        info.setWordWrap(True)
+        qr = QLabel()
+        qr.setAlignment(Qt.AlignCenter)
+        pm = QPixmap()
+        pm.loadFromData(share.qr_png(self.srv.url))
+        qr.setPixmap(pm)
+        qr.setStyleSheet("background:#FFFFFF;border-radius:12px;padding:10px;")
+        how = QLabel("امسح الرمز بكاميرا الهاتف (يجب أن يكون على نفس شبكة الواي فاي). "
+                     "الرابط سري وعشوائي ويتوقف بمجرد إغلاق هذه النافذة. "
+                     "إن سأل جدار حماية ويندوز، اسمح بالوصول للشبكة الخاصة.")
+        how.setObjectName("Sub")
+        how.setWordWrap(True)
+        self.url_edit = QLineEdit(self.srv.url)
+        self.url_edit.setReadOnly(True)
+        self.url_edit.setLayoutDirection(Qt.LeftToRight)
+        self.status = QLabel("بانتظار الهاتف…")
+        copy = QPushButton("نسخ الرابط")
+        copy.setObjectName("Ghost")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.srv.url))
+        close = QPushButton("إيقاف الإرسال")
+        close.setObjectName("Primary")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addWidget(copy)
+        row.addStretch(1)
+        row.addWidget(close)
+        for w in (t, info, qr, how, self.url_edit, self.status):
+            lay.addWidget(w)
+        lay.addLayout(row)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(700)
+
+    def _poll(self):
+        s = self.srv
+        if s.hits:
+            pct = min(100, int(s.sent * 100 / max(1, s.size * s.hits)))
+            self.status.setText(f"جارٍ الإرسال… {_fmt_size(s.sent)}" + ("" if pct >= 100 else f" ({pct}%)"))
+        if s.idle():
+            self.accept()
+
+    def done(self, r):
+        self._timer.stop()
+        self.srv.stop()
+        super().done(r)
+
+
 class _PreviewFetch(QObject):
     done = Signal(object)
 

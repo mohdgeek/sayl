@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QInputDialog, 
 from . import icons, power, selfupdate, setup_tools, theme
 from .categories import CATEGORIES, EXT_TO_CAT, LABELS, category_of, ext_of
 from .config import Config
-from .dialogs import (AddDialog, FileConfirmDialog, ScheduleDialog, ProgressWindow, SettingsDialog,
+from .dialogs import (AddDialog, FileConfirmDialog, ScheduleDialog, ShareDialog, ProgressWindow, SettingsDialog,
                       StatsDialog, TorrentConfirmDialog, WelcomeDialog)
 from .engine import COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING, QUEUED
 from .manager import DownloadManager, DuplicateError
@@ -548,6 +548,8 @@ class MainWindow(QMainWindow):
         m = QMenu(self)
         if d.state == COMPLETED:
             m.addAction("فتح الملف", lambda: self._open_file(id))
+            if d.kind != "torrent" and d.filename and os.path.isfile(os.path.join(d.folder, d.filename)):
+                m.addAction("إرسال إلى الهاتف…", lambda: self._share(d))
         m.addAction("فتح المجلد", lambda: self._open_folder(id))
         m.addAction("نسخ الرابط", lambda: self._copy(d.url))
         if d.state == COMPLETED:
@@ -569,6 +571,12 @@ class MainWindow(QMainWindow):
     def _copy(self, text):
         self._ignore_clip = text
         QApplication.clipboard().setText(text)
+
+    def _share(self, d):
+        try:
+            ShareDialog(os.path.join(d.folder, d.filename), self).exec()
+        except OSError as e:
+            QMessageBox.warning(self, "سيل", f"تعذّر بدء الإرسال: {e}")
 
     def _schedule_item(self, d):
         dlg = ScheduleDialog(self)

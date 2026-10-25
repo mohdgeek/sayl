@@ -193,3 +193,39 @@ def test_glass_themes_and_settings_fit(tmp_path):
     h = app.primaryScreen().availableGeometry().height()
     assert dlg.maximumHeight() <= h and dlg.height() <= h
     dlg.tabs.setCurrentIndex(4)
+
+
+def test_share_server(tmp_path):
+    import requests
+    from sayl import share
+    f = tmp_path / "ملف.bin"
+    f.write_bytes(bytes(range(256)) * 400)
+    s = share.ShareServer(str(f), host="127.0.0.1")
+    try:
+        r = requests.get(s.url, timeout=5)
+        assert r.status_code == 200 and r.content == f.read_bytes()
+        r = requests.get(s.url, headers={"Range": "bytes=100-199"}, timeout=5)
+        assert r.status_code == 206 and r.content == f.read_bytes()[100:200]
+        bad = s.url.replace(s.token, "wrong")
+        assert requests.get(bad, timeout=5).status_code == 404
+        assert requests.get(f"http://127.0.0.1:{s.port}/", timeout=5).status_code == 404
+        png = share.qr_png(s.url)
+        assert png[:4] == b"\x89PNG"
+    finally:
+        s.stop()
+
+
+def test_share_dialog(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from sayl.dialogs import ShareDialog
+    f = tmp_path / "a.zip"
+    f.write_bytes(b"x" * 5000)
+    d = ShareDialog(str(f))
+    assert d.srv.url.endswith("/a.zip")
+    d.accept()
+    import requests
+    with pytest.raises(requests.RequestException):
+        requests.get(d.srv.url.replace(d.srv.host, "127.0.0.1"), timeout=2)
