@@ -256,6 +256,8 @@ class MainWindow(QMainWindow):
         mm.addAction("حذف المكتملة من القائمة", self.manager.clear_completed)
         mm.addSeparator()
         mm.addAction("إرسال إلى جهاز آخر…", lambda: LanSendDialog(parent=self).exec())
+        mm.addAction("نسخ احتياطي…", self.do_backup)
+        mm.addAction("استعادة نسخة…", self.do_restore)
         mm.addAction("الإحصاءات…", lambda: StatsDialog(self.manager.stats, self).exec())
         mm.addAction("تثبيت إضافة المتصفح…", self.show_welcome)
         mm.addSeparator()
@@ -616,6 +618,34 @@ class MainWindow(QMainWindow):
         if self.tray.isVisible() and self.config["notify"]:
             self.tray.showMessage("سيل", "تم استلام " + os.path.basename(info["path"]),
                                   QSystemTrayIcon.Information, 4000)
+
+    def do_backup(self):
+        from PySide6.QtWidgets import QFileDialog
+        from . import backup
+        import datetime
+        f, _ = QFileDialog.getSaveFileName(self, "حفظ نسخة احتياطية",
+                                           f"sayl-backup-{datetime.date.today()}.zip", "Zip (*.zip)")
+        if f:
+            try:
+                backup.make_backup(self.manager, self.config, f)
+                QMessageBox.information(self, "سيل", "تم حفظ النسخة الاحتياطية.")
+            except OSError as e:
+                QMessageBox.warning(self, "سيل", f"تعذّر الحفظ: {e}")
+
+    def do_restore(self):
+        from PySide6.QtWidgets import QFileDialog
+        from . import backup
+        f, _ = QFileDialog.getOpenFileName(self, "اختر نسخة احتياطية", "", "Zip (*.zip)")
+        if not f:
+            return
+        try:
+            n = backup.restore_backup(self.manager, self.config, f)
+        except (OSError, ValueError, KeyError) as e:
+            QMessageBox.warning(self, "سيل", f"تعذّرت الاستعادة: {e}")
+            return
+        QMessageBox.information(self, "سيل", f"تمت الاستعادة: أُضيف {n} تحميل. "
+                                "أعد تشغيل البرنامج لتطبيق كل الإعدادات.")
+        self.refresh(force=True)
 
     def _share(self, d):
         try:

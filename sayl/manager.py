@@ -13,7 +13,7 @@ import urllib.parse
 from .config import APP_DIR, Config
 from .engine import (CANCELED, COMPLETED, DOWNLOADING, ERROR, PAUSED, PROBING,
                      QUEUED, Download, RateLimiter, make_download)
-from . import engine, rules, torrent
+from . import checksums, engine, rules, torrent
 from .categories import LABELS, category_of
 from .torrent import is_magnet
 from .media import MediaDownload, available as media_available, is_media_url
@@ -367,6 +367,7 @@ class DownloadManager:
         self._verify_pending()
         self._count_completed()
         self._auto_retry()
+        self._auto_checksum()
         with self._lock:
             if not is_open:     # أغلقت النافذة: أوقف ما لم يُطلب يدويًا وأعده للطابور
                 capped = self.capped()
@@ -494,6 +495,27 @@ class DownloadManager:
                 d.hash_state = "checking"
                 threading.Thread(target=self._verify_one, args=(d, exp), daemon=True).start()
 
+    def _auto_checksum(self):
+        """للتحميلات العادية المكتملة بلا بصمة: نبحث عن البصمة الرسمية تلقائيًا ثم تتحقق _verify_pending."""
+        if not self.config["auto_checksum"]:
+            return
+        for d in list(self.items.values()):
+            if (d.state == COMPLETED and d.kind == "http" and not getattr(d, "expected_hash", "")
+                    and not getattr(d, "_cs_tried", False) and d.filename
+                    and "mega.nz" not in d.url and d.url.lower().startswith(("http://", "https://"))):
+                d._cs_tried = True
+                threading.Thread(target=self._find_checksum, args=(d,), daemon=True, name="cs-" + d.id).start()
+
+    def _find_checksum(self, d):
+        try:
+            h = normalize_hash(checksums.find(d.url, d.filename))
+        except Exception:  # noqa: BLE001
+            h = ""
+        if h and not getattr(d, "expected_hash", "") and d.id in self.items:
+            d.expected_hash, d.hash_auto, d.hash_state = h, True, None
+            self.events.append(f"عُثر على بصمة رسمية لـ «{d.filename}» وسيتم التحقق منها")
+            self.save()
+
     def _verify_one(self, d, exp):
         path = os.path.join(d.folder, d.filename or "")
         try:
@@ -618,6 +640,7 @@ class DownloadManager:
                         it = self.items[i]
                         e = it.to_dict()
                         e["hash"] = getattr(it, "expected_hash", "")
+                        e["hash_auto"] = bool(getattr(it, "hash_auto", False))
                         e["start_at"] = getattr(it, "start_at", None)
                         e["hash_state"] = getattr(it, "hash_state", None) if getattr(it, "hash_state", None) in ("ok", "bad") else None
                         data.append(e)
@@ -631,13 +654,17 @@ class DownloadManager:
             except OSError:
                 pass
 
-    def _load(self):
+    def _load(self, path=None):
         try:
-            with open(self.state_path, "r", encoding="utf-8") as f:
+            with open(path or self.state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
-            return
+            return 0
+        added = 0
         for e in data:
+            if e.get("id") in self.items:
+                continue
+            added += 1
             st = e.get("state", PAUSED)
             state = COMPLETED if st == COMPLETED else PAUSED
             if e.get("kind") == "torrent":
@@ -662,6 +689,8 @@ class DownloadManager:
             d.expected_hash = e.get("hash", "")
             d.start_at = e.get("start_at")
             d.hash_state = e.get("hash_state")
+            d.hash_auto = bool(e.get("hash_auto"))
+            d._cs_tried = state == COMPLETED          # لا نبحث عن بصمات لما اكتمل في جلسات سابقة
             d.subfolder = e.get("subfolder", False)
             d.note = e.get("note", "")
             d.final_dir = e.get("final_dir")
@@ -671,3 +700,4 @@ class DownloadManager:
                 d.state, d.force = QUEUED, False      # الجدولة تبقى بعد إعادة التشغيل
             self.items[d.id] = d
             self._order.append(d.id)
+        return added

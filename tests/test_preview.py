@@ -315,3 +315,111 @@ def test_lan_dialog_sends(tmp_path):
         d.reject()
     finally:
         r.stop()
+
+
+def test_parse_sums():
+    from sayl import checksums as cs
+    h = "a" * 64
+    h2 = "b" * 64
+    txt = f"{h}  *app-1.0.exe\n{h2}  other.zip\n"
+    assert cs.parse_sums(txt, "app-1.0.exe") == h
+    assert cs.parse_sums(txt, "other.zip") == h2
+    assert cs.parse_sums(txt, "missing.bin") == ""
+    assert cs.parse_sums(f"SHA256 (f.iso) = {h}\n", "f.iso") == h
+    assert cs.parse_sums(h + "\n", "whatever.bin") == h                       # ملف بصمة وحيد
+    assert cs.parse_sums(f"{h}  f.bin\n", "f.bin") == h
+    assert cs.parse_sums(f"{'c' * 10}  f.bin\n", "f.bin") == ""              # طول غير صالح
+
+
+def test_github_digest_and_candidates():
+    from sayl import checksums as cs
+    u = "https://github.com/o/r/releases/download/v1.4/App%201.exe"
+    assert cs.github_parts(u) == ("o", "r", "v1.4", "App%201.exe")
+
+    class R:
+        status_code = 200
+        def json(self):
+            return {"assets": [{"name": "App 1.exe", "digest": "sha256:" + "d" * 64},
+                               {"name": "other", "digest": "sha256:" + "e" * 64}]}
+
+    class S:
+        def get(self, *a, **k):
+            return R()
+    assert cs.github_digest(S(), u) == "sha256:" + "d" * 64
+    c = cs.candidates("https://x.org/d/f.zip?x=1", "f.zip")
+    assert "https://x.org/d/f.zip.sha256" in c and "https://x.org/d/SHA256SUMS" in c
+
+
+def test_auto_checksum_end_to_end(tmp_path):
+    import hashlib, time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from sayl.manager import DownloadManager
+    body = b"hello-sayl" * 20000
+    digest = hashlib.sha256(body).hexdigest()
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def do_GET(self):
+            if self.path == "/pkg.bin":
+                data = body
+            elif self.path == "/SHA256SUMS":
+                data = f"{digest}  pkg.bin\n".encode()
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        cfg = Config(str(tmp_path / "c.json"))
+        cfg["download_dir"] = str(tmp_path / "dl")
+        m = DownloadManager(cfg, state_path=str(tmp_path / "s.json"))
+        d = m.add(f"http://127.0.0.1:{srv.server_port}/pkg.bin", dest_dir=str(tmp_path / "dl"))
+        t0 = time.time()
+        while time.time() - t0 < 20 and getattr(d, "hash_state", None) != "ok":
+            time.sleep(0.2)
+        assert d.state == "completed" and d.hash_state == "ok" and d.hash_auto is True
+        m.shutdown()
+    finally:
+        srv.shutdown()
+
+
+def test_dupes(tmp_path):
+    from sayl import dupes
+    cfg = Config(str(tmp_path / "c.json"))
+    cfg["download_dir"] = str(tmp_path)
+    (tmp_path / "فيديو").mkdir()
+    (tmp_path / "فيديو" / "movie.mp4").write_bytes(b"1" * 200000)
+    (tmp_path / "other.bin").write_bytes(b"2" * 200000)
+    (tmp_path / "small.txt").write_bytes(b"3" * 10)
+    h = dupes.find(cfg, "movie.mp4", 200000)
+    assert h[0][1] == "same" and h[0][0].endswith("movie.mp4")
+    assert any(k == "size" for _, k in dupes.find(cfg, "new.zip", 200000))
+    assert dupes.find(cfg, "movie.mp4", 12345) == []
+    assert dupes.find(cfg, "small.txt", 10) == []
+
+
+def test_backup_roundtrip(tmp_path):
+    from sayl import backup
+    from sayl.manager import DownloadManager
+    cfg = Config(str(tmp_path / "c.json"))
+    cfg.data["speed_limit"] = 123
+    m = DownloadManager(cfg, state_path=str(tmp_path / "d.json"))
+    m.stats.add(1000, "x.com")
+    m.add("https://x.example/f.bin", start=False)
+    b = backup.make_backup(m, cfg, str(tmp_path / "b.zip"))
+    cfg2 = Config(str(tmp_path / "c2.json"))
+    m2 = DownloadManager(cfg2, state_path=str(tmp_path / "d2.json"))
+    n = backup.restore_backup(m2, cfg2, b)
+    assert n == 1 and len(m2.items) == 1
+    assert cfg2.data["speed_limit"] == 123
+    assert cfg2.data["token"] != cfg.data["token"]
+    assert m2.stats.data["total"] == 1000
+    assert backup.restore_backup(m2, cfg2, b) == 0               # لا تكرار
+    m.shutdown()
+    m2.shutdown()

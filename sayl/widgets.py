@@ -283,7 +283,8 @@ class DownloadRow(QFrame):
             hs = getattr(d, "hash_state", None)
             parts = [ltr(fmt_size(d.size)) if d.size else "", LABELS[cat], ltr(host_of(d.url)),
                      {"ok": "✓ البصمة مطابقة", "bad": "⚠ البصمة لا تطابق",
-                      "checking": "جارٍ التحقق من البصمة…"}.get(hs, "")]
+                      "checking": "جارٍ التحقق من البصمة…"}.get(hs, "")
+                     + (" (تلقائيًا)" if hs in ("ok", "bad") and getattr(d, "hash_auto", False) else "")]
             self._meta(" · ".join(p for p in parts if p), False)
             self.speed.setText("")
             self.eta.setText("")

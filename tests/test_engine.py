@@ -137,6 +137,7 @@ def test_pause_and_resume(tmp_path):
         assert wait_for(lambda: d.downloaded > 1_000_000)
         d.pause()
         assert d.state == PAUSED
+        d.wait(10)                                # الإيقاف فوري للواجهة؛ ننتظر انتهاء الخيوط قبل القياس
         partial = d.downloaded
         assert 0 < partial < len(DATA)
         time.sleep(0.3)

@@ -823,6 +823,9 @@ class FileConfirmDialog(QDialog):
         top = QHBoxLayout()
         top.addLayout(form, 1)
         top.addLayout(side)
+        self.dup_lbl = QLabel("")
+        self.dup_lbl.setWordWrap(True)
+        self.dup_lbl.setVisible(False)
         self.pv_box = QFrame()
         self.pv_box.setObjectName("Card")
         self.pv_box.setVisible(False)
@@ -845,6 +848,7 @@ class FileConfirmDialog(QDialog):
         t.setObjectName("PageTitle")
         lay.addWidget(t)
         lay.addLayout(top)
+        lay.addWidget(self.dup_lbl)
         lay.addWidget(self.pv_box)
         lay.addLayout(btns)
         self._headers = headers
@@ -901,6 +905,7 @@ class FileConfirmDialog(QDialog):
             if self._edited_path:      # غيّر المستخدم المسار بيده: نبدّل الاسم فقط
                 self.path.setText(os.path.join(os.path.dirname(self.path.text()), name))
         self.size_lbl.setText(_fmt_size(size) if size else "الحجم غير معروف")
+        self._check_dupes(name, size)
         from . import preview as _pv
         if name and _pv.kind_for(name, size):
             self.pv_title.setText("جارٍ تحميل المعاينة…")
@@ -908,6 +913,25 @@ class FileConfirmDialog(QDialog):
             self.pv_list.hide()
             self.pv_box.setVisible(True)
             self._pfetch.run(self._url_text, name, size, self._headers)
+
+    def _check_dupes(self, name, size):
+        from . import dupes
+        try:
+            hits = dupes.find(self.config, name, size, [os.path.dirname(self.path.text())])
+        except Exception:  # noqa: BLE001
+            hits = []
+        if not hits:
+            self.dup_lbl.setVisible(False)
+            return
+        path, kind = hits[0]
+        msg = ("⚠ لديك هذا الملف مسبقًا (نفس الاسم والحجم): " if kind == "same"
+               else "ℹ يوجد ملف بنفس الحجم باسم مختلف (ربما هو نفسه): ") + path
+        if len(hits) > 1:
+            msg += f"  (+{len(hits) - 1})"
+        self.dup_lbl.setText(msg)
+        self.dup_lbl.setStyleSheet(f"color:{theme.C['err'] if kind == 'same' else theme.C['sub']};font-weight:600;")
+        self.dup_lbl.setVisible(True)
+        self.adjustSize()
 
     def _show_preview(self, res):
         if not res:
@@ -1897,6 +1921,9 @@ class SettingsDialog(QDialog):
         f.addRow("", self.clip)
         f.addRow("", self.notify)
         f.addRow("", self.autostart)
+        self.auto_cs = QCheckBox("التحقق التلقائي من سلامة الملف بالبحث عن بصمته الرسمية بعد التحميل")
+        self.auto_cs.setChecked(bool(c["auto_checksum"]))
+        f.addRow("", self.auto_cs)
         self.lan_rx = QCheckBox("استقبال الملفات من أجهزة سيل الأخرى على نفس الشبكة (مع طلب موافقتك على كل ملف)")
         self.lan_rx.setChecked(bool(c["lan_receive"]))
         f.addRow("", self.lan_rx)
@@ -2487,6 +2514,7 @@ class SettingsDialog(QDialog):
         c["clipboard_watch"] = self.clip.isChecked()
         c["notify"] = self.notify.isChecked()
         c["lan_receive"] = self.lan_rx.isChecked()
+        c["auto_checksum"] = self.auto_cs.isChecked()
         c["watch_enabled"] = self.watch.isChecked()
         c["watch_folder"] = self.watch_dir.text().strip()
         c["schedule_enabled"] = self.sched.isChecked()
