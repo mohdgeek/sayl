@@ -567,3 +567,18 @@ def test_frozen_host_command_posix(tmp_path, monkeypatch):
     (tmp_path / "app" / "SaylHost-1.0.0").write_bytes(b"old")
     st.host_command()
     assert not os.path.exists(tmp_path / "app" / "SaylHost-1.0.0")      # الإصدار القديم يُحذف
+
+
+def test_extension_installed_detection(tmp_path, monkeypatch):
+    import json
+    from sayl import setup_tools as st
+    eid = "a" * 32
+    prof = tmp_path / "Edge" / "Profile 1"
+    prof.mkdir(parents=True)
+    monkeypatch.setattr(st, "_user_data_dirs", lambda key: [str(tmp_path / "Edge")] if key == "edge" else [])
+    assert st.extension_installed("edge", eid) is None
+    (prof / "Preferences").write_text(json.dumps({"extensions": {"settings": {eid: {"state": 1}}}}))
+    assert st.extension_installed("edge", eid) == "on"
+    (prof / "Preferences").write_text(json.dumps({"extensions": {"settings": {eid: {"state": 0}}}}))
+    assert st.extension_installed("edge", eid) == "off"
+    assert st.extension_installed("chrome", eid) is None

@@ -331,6 +331,59 @@ def find_browsers():
     return out
 
 
+def _user_data_dirs(key):
+    """مجلدات بيانات المتصفح المحتملة (حسب النظام) لاكتشاف الإضافة المثبّتة."""
+    home = os.path.expanduser("~")
+    la = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+    ra = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+    mac = os.path.join(home, "Library", "Application Support")
+    cfg = os.path.join(home, ".config")
+    table = {
+        "chrome": [os.path.join(la, "Google", "Chrome", "User Data"), os.path.join(mac, "Google", "Chrome"),
+                   os.path.join(cfg, "google-chrome")],
+        "edge": [os.path.join(la, "Microsoft", "Edge", "User Data"), os.path.join(mac, "Microsoft Edge"),
+                 os.path.join(cfg, "microsoft-edge")],
+        "brave": [os.path.join(la, "BraveSoftware", "Brave-Browser", "User Data"),
+                  os.path.join(mac, "BraveSoftware", "Brave-Browser"), os.path.join(cfg, "BraveSoftware", "Brave-Browser")],
+        "vivaldi": [os.path.join(la, "Vivaldi", "User Data"), os.path.join(mac, "Vivaldi"), os.path.join(cfg, "vivaldi")],
+        "opera": [os.path.join(ra, "Opera Software", "Opera Stable"), os.path.join(mac, "com.operasoftware.Opera"),
+                  os.path.join(cfg, "opera")],
+    }
+    return table.get(key, [])
+
+
+def extension_installed(key, ext_id=None):
+    """هل إضافة سيل مثبّتة في هذا المتصفح؟ يعيد "on" (مفعّلة) أو "off" (معطّلة) أو None.
+    يقرأ ملفات Preferences في ملفات المتصفح الشخصية؛ لا يغيّر شيئًا."""
+    try:
+        ext_id = ext_id or extension_id()
+    except Exception:  # noqa: BLE001
+        return None
+    found = None
+    for base in _user_data_dirs(key):
+        if not os.path.isdir(base):
+            continue
+        profiles = [base] + [os.path.join(base, d) for d in sorted(os.listdir(base))
+                             if d == "Default" or d.startswith("Profile ")]
+        for prof in profiles:
+            for fn in ("Secure Preferences", "Preferences"):
+                fp = os.path.join(prof, fn)
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    ent = data.get("extensions", {}).get("settings", {}).get(ext_id)
+                except Exception:  # noqa: BLE001
+                    continue
+                if not ent:
+                    continue
+                if ent.get("state", 1) == 1 and not ent.get("disable_reasons"):
+                    return "on"
+                found = "off"
+    return found
+
+
 def open_extensions_page(browser):
     import subprocess
     if not browser.get("exe"):

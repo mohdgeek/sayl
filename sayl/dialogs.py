@@ -91,10 +91,130 @@ def _scroll(widget):
     sa = QScrollArea()
     sa.setWidgetResizable(True)
     sa.setFrameShape(QFrame.NoFrame)
-    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     sa.setStyleSheet("QScrollArea{background:transparent;} QScrollArea > QWidget > QWidget{background:transparent;}")
     sa.setWidget(widget)
     return sa
+
+
+class ExtensionWizard(QDialog):
+    """معالج تثبيت الإضافة للمبتدئين: خطوات كبيرة بأسماء الأزرار كما تظهر في المتصفح،
+    ويتابع الحالة تلقائيًا ويعلن النجاح حين تظهر الإضافة."""
+
+    def __init__(self, config, browser, parent=None):
+        super().__init__(parent)
+        from PySide6.QtCore import QTimer
+        self.config, self.browser = config, browser
+        self.setWindowTitle(f"تثبيت إضافة سيل في {browser['name']}")
+        self.setMinimumWidth(560)
+        self.path = ""
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        t = QLabel(f"تثبيت الإضافة في {browser['name']}")
+        t.setObjectName("PageTitle")
+        lay.addWidget(t)
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+        edge = browser["key"] == "edge"
+        dev = ("فعّل مفتاح <b>«وضع المطور / Developer mode»</b> (في القائمة اليسرى من الصفحة)"
+               if edge else "فعّل مفتاح <b>«وضع المطوّر / Developer mode»</b> (أعلى يمين الصفحة)")
+        steps = [
+            ("افتح صفحة الإضافات", "اضغط الزر الأخضر أدناه؛ سيفتح المتصفح على صفحة الإضافات."),
+            ("وضع المطوّر", dev + "."),
+            ("حمّل الإضافة", "اضغط <b>«تحميل غير مضغوط / Load unpacked»</b>، ثم في نافذة اختيار المجلد "
+                             "اضغط <b>Ctrl+V</b> داخل خانة المسار (نسخنا المسار لك) ثم <b>«تحديد مجلد»</b>."),
+            ("انتهى", "سيظهر «سيل» في قائمة الإضافات، ويتحول هذا المعالج إلى النجاح تلقائيًا. "
+                      "إن ظهرت رسالة «تعطيل إضافات وضع المطوّر» فاختر <b>إبقاء / Keep</b>."),
+        ]
+        for i, (h, d) in enumerate(steps, 1):
+            card = QLabel(f"<span style='font-size:15pt'><b>{i}</b></span>&nbsp;&nbsp;<b>{h}</b><br>{d}")
+            card.setWordWrap(True)
+            card.setTextFormat(Qt.RichText)
+            card.setStyleSheet(f"QLabel{{background:{theme.C['surface2']};border-radius:10px;padding:10px 12px;}}")
+            lay.addWidget(card)
+        self.msg = QLabel("")
+        self.msg.setObjectName("Sub")
+        self.msg.setWordWrap(True)
+        self.msg.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(self.msg)
+        self.b_open = QPushButton(f"افتح صفحة الإضافات في {browser['name']}")
+        self.b_open.setObjectName("Primary")
+        self.b_open.clicked.connect(self._open_page)
+        b_copy = QPushButton("انسخ المسار")
+        b_copy.setObjectName("Ghost")
+        b_copy.clicked.connect(self._copy)
+        b_folder = QPushButton("افتح المجلد (للسحب والإفلات)")
+        b_folder.setObjectName("Ghost")
+        b_folder.clicked.connect(self._folder)
+        close = QPushButton("إغلاق")
+        close.setObjectName("Ghost")
+        close.clicked.connect(self.accept)
+        r = QHBoxLayout()
+        r.addWidget(close)
+        r.addStretch(1)
+        r.addWidget(b_folder)
+        r.addWidget(b_copy)
+        r.addWidget(self.b_open)
+        lay.addLayout(r)
+        self._prepare()
+        self._tm = QTimer(self)
+        self._tm.timeout.connect(self._poll)
+        self._tm.start(1200)
+        self._poll()
+
+    def _prepare(self):
+        from .server import open_pairing
+        try:
+            self.path = setup_tools.export_extension(self.config)
+            open_pairing(900)
+            setup_tools.register_native_host(self.config)
+        except Exception as e:  # noqa: BLE001
+            self.msg.setText(f"تعذّر تجهيز الإضافة: {e}")
+            self.b_open.setEnabled(False)
+            return
+        self._copy()
+        self.msg.setText(f"المسار (منسوخ): {self.path}")
+
+    def _copy(self):
+        if self.path:
+            QApplication.clipboard().setText(self.path)
+
+    def _folder(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        if self.path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.path))
+
+    def _open_page(self):
+        self._copy()
+        try:
+            setup_tools.open_extensions_page(self.browser)
+        except Exception as e:  # noqa: BLE001
+            self.msg.setText(f"تعذّر فتح المتصفح: {e}\nافتحه بنفسك واكتب في شريط العنوان: "
+                             f"{self.browser['scheme']}://extensions")
+
+    def _poll(self):
+        import time
+        from . import server as sv
+        st = setup_tools.extension_installed(self.browser["key"])
+        seen = sv.STATS["seen"]
+        c = theme.C
+        if seen and time.time() - seen < 75:
+            self.status.setText(f"<b style='color:{c['ok']}'>✔ تم! الإضافة مثبّتة ومتصلة بسيل.</b>")
+            self._tm.stop()
+        elif st == "on":
+            self.status.setText(f"<b style='color:{c['ok']}'>✔ ثُبّتت الإضافة. افتح أي صفحة في المتصفح "
+                                "وسيكتمل الاتصال خلال ثوانٍ.</b>")
+        elif st == "off":
+            self.status.setText(f"<b style='color:{c['err']}'>الإضافة مثبّتة لكنها معطّلة — فعّلها من صفحة الإضافات.</b>")
+        else:
+            self.status.setText("<b>● لم تُثبَّت بعد</b> — اتبع الخطوات؛ ننتظرك وسنخبرك فور اكتمالها.")
+
+    def done(self, r):
+        self._tm.stop()
+        super().done(r)
 
 
 class ShareDialog(QDialog):
@@ -1780,8 +1900,14 @@ class SettingsDialog(QDialog):
         lay.addLayout(btns)
         scr = QApplication.primaryScreen()
         if scr is not None:                    # لا تتجاوز النافذة ارتفاع الشاشة المتاح
-            h = scr.availableGeometry().height()
-            self.resize(max(self.minimumWidth(), 620), min(760, h - 80))
+            ag = scr.availableGeometry()
+            h = ag.height()
+            need = 0                           # العرض اللازم لأعرض صفحة كي لا يُقصّ أي نص يمينًا أو يسارًا
+            for i in range(tabs.count()):
+                w = tabs.widget(i).widget()
+                need = max(need, w.sizeHint().width() if w is not None else 0)
+            width = max(self.minimumWidth(), 620, need + 90)
+            self.resize(min(width, ag.width() - 40), min(760, h - 80))
             self.setMaximumHeight(h - 40)
 
     # ------------------------------------------------------------ القواعد
@@ -2084,10 +2210,12 @@ class SettingsDialog(QDialog):
             btn.setObjectName("Ghost")
             btn.setEnabled(bool(b["exe"]))
             btn.clicked.connect(lambda _=False, br=b: self._install_in(br))
+            st = QLabel("")
             row.addWidget(name, 1)
+            row.addWidget(st)
             row.addWidget(btn)
             lay.addLayout(row)
-            self._browser_rows.append((b, name, btn))
+            self._browser_rows.append((b, name, btn, st))
         self.ext_msg = QLabel("")
         self.ext_msg.setWordWrap(True)
         self.ext_msg.setObjectName("Sub")
@@ -2136,6 +2264,18 @@ class SettingsDialog(QDialog):
         import time
         from . import server as sv
         now = time.time()
+        c = theme.C
+        for b, _n, btn, st in getattr(self, "_browser_rows", []):
+            state = setup_tools.extension_installed(b["key"]) if b["exe"] else None
+            if state == "on":
+                st.setText(f"<b style='color:{c['ok']}'>✔ مثبّتة</b>")
+                btn.setText("إعادة التثبيت")
+            elif state == "off":
+                st.setText(f"<b style='color:{c['err']}'>معطّلة</b>")
+                btn.setText("تثبيت الإضافة")
+            else:
+                st.setText("<span style='opacity:.6'>غير مثبّتة</span>" if b["exe"] else "")
+                btn.setText("تثبيت الإضافة")
         seen, bad = sv.STATS["seen"], sv.STATS["bad"]
         if seen and now - seen < 75:
             who = f" ({sv.STATS['browser']})" if sv.STATS["browser"] else ""
@@ -2182,19 +2322,8 @@ class SettingsDialog(QDialog):
                              "ستظهر حالة «متصلة» هنا خلال ثوانٍ.")
 
     def _install_in(self, browser):
-        from .server import open_pairing
-        try:
-            path = setup_tools.export_extension(self.config)
-            open_pairing(600)
-            setup_tools.register_native_host(self.config)
-            setup_tools.open_extensions_page(browser)
-        except Exception as e:  # noqa: BLE001
-            self.ext_msg.setText(f"تعذّر التثبيت: {e}")
-            return
-        self._ext_path = path
-        self.ext_msg.setText(
-            f"تم تجهيز الإضافة وفتح {browser['name']}. في صفحة الإضافات: فعّل «وضع المطوّر» ثم "
-            f"«تحميل إضافة غير مُحزّمة» واختر المجلد:\n{path}")
+        ExtensionWizard(self.config, browser, self).exec()
+        self._refresh_ext_state()
 
     def _install_firefox(self):
         from PySide6.QtCore import QUrl
@@ -2592,7 +2721,7 @@ class WelcomeDialog(QDialog):
         intro.setWordWrap(True)
         lay.addWidget(intro)
         for n, txt in (("1", "ألصق أي رابط في النافذة الرئيسية، أو انسخه وسيقترح عليك سيل تحميله."),
-                       ("2", "لالتقاط الفيديوهات من Chrome ثبّت الإضافة بالزر أدناه (دقيقة واحدة)."),
+                       ("2", "لالتقاط الفيديوهات من المتصفح ثبّت الإضافة بالزر أدناه (دقيقة واحدة، بخطوات مصوّرة)."),
                        ("3", "في الإعدادات تجد الجدولة والألوان والتحديث التلقائي.")):
             row = QLabel(f"<b>{n}.</b>  {txt}")
             row.setWordWrap(True)
@@ -2600,7 +2729,7 @@ class WelcomeDialog(QDialog):
         self.msg = QLabel("")
         self.msg.setObjectName("Sub")
         self.msg.setWordWrap(True)
-        self.btn_ext = QPushButton("تثبيت إضافة Chrome")
+        self.btn_ext = QPushButton("تثبيت إضافة المتصفح")
         self.btn_ext.setObjectName("Primary")
         self.btn_ext.clicked.connect(self.install_extension)
         done = QPushButton("ابدأ الاستخدام")
@@ -2615,21 +2744,9 @@ class WelcomeDialog(QDialog):
         lay.addLayout(btns)
 
     def install_extension(self):
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-        try:
-            path = setup_tools.export_extension(self.config)
-            setup_tools.register_native_host(self.config)
-        except Exception as e:  # noqa: BLE001
-            self.msg.setText(f"تعذّر تجهيز الإضافة: {e}")
+        found = [b for b in setup_tools.find_browsers() if b["exe"]]
+        if not found:
+            self.msg.setText("لم نعثر على متصفح مدعوم. ثبّت Chrome أو Edge ثم أعد المحاولة من الإعدادات ← المتصفحات.")
             return
-        from .server import open_pairing
-        open_pairing(600)
-        QApplication.clipboard().setText("chrome://extensions")
-        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
-        self.msg.setText(
-            "جهّزت الإضافة وفتحت مجلدها. الآن:\n"
-            "• افتح Chrome والصق في شريط العنوان: chrome://extensions (نسخته لك)\n"
-            "• فعّل «وضع المطوّر» من الأعلى\n"
-            "• اضغط «تحميل إضافة غير مُحزّمة» واختر المجلد الذي فُتح\n"
-            "لا حاجة لإدخال أي رمز: الإضافة مرتبطة تلقائيًا.")
+        pick = next((b for b in found if b["key"] == "chrome"), found[0])
+        ExtensionWizard(self.config, pick, self).exec()
