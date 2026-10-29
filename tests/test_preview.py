@@ -502,3 +502,68 @@ def test_no_nested_type_folder(tmp_path):
     d._finish()
     assert (tmp_path / LABELS["apps"] / "a.exe").exists()
     assert not (tmp_path / LABELS["apps"] / LABELS["apps"]).exists()
+
+
+def test_linux_autostart_and_assoc(tmp_path, monkeypatch):
+    import sys
+    from sayl import setup_tools as st
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/Sayl/Sayl")
+    monkeypatch.setattr(st, "IS_WIN", False)
+    monkeypatch.setattr(st, "IS_MAC", False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(st, "_XDG_AUTOSTART", str(tmp_path / "autostart" / "sayl.desktop"))
+    monkeypatch.setattr(st, "_XDG_APPS", str(tmp_path / "apps"))
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+    assert st.autostart_supported() and not st.autostart_enabled()
+    st.set_autostart(True)
+    txt = (tmp_path / "autostart" / "sayl.desktop").read_text()
+    assert "Exec=\"/opt/Sayl/Sayl\" --minimized" in txt and st.autostart_enabled()
+    st.set_autostart(False)
+    assert not st.autostart_enabled()
+    assert st.torrent_assoc_supported() and not st.torrent_assoc_enabled()
+    st.set_torrent_assoc(True)
+    d = (tmp_path / "apps" / "sayl.desktop").read_text()
+    assert "x-scheme-handler/magnet" in d and "application/x-bittorrent" in d and st.torrent_assoc_enabled()
+    st.set_torrent_assoc(False)
+    assert not st.torrent_assoc_enabled()
+
+
+def test_mac_autostart_and_nm_dirs(tmp_path, monkeypatch):
+    import os, sys
+    from sayl import setup_tools as st
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/Applications/Sayl.app/Contents/MacOS/Sayl")
+    monkeypatch.setattr(st, "IS_WIN", False)
+    monkeypatch.setattr(st, "IS_MAC", True)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(st, "_LA_PATH", str(tmp_path / "LaunchAgents" / "com.sayl.app.plist"))
+    assert st.autostart_supported() and not st.torrent_assoc_supported()   # ربط magnet غير متاح على ماك
+    st.set_autostart(True)
+    assert "RunAtLoad" in (tmp_path / "LaunchAgents" / "com.sayl.app.plist").read_text()
+    assert st.autostart_enabled()
+    st.set_autostart(False)
+    assert not st.autostart_enabled()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    chrome = tmp_path / "Library" / "Application Support" / "Google" / "Chrome"
+    chrome.mkdir(parents=True)
+    dirs = st._nm_dirs_posix()
+    assert dirs == [str(chrome / "NativeMessagingHosts")]
+
+
+def test_frozen_host_command_posix(tmp_path, monkeypatch):
+    import os, sys
+    from sayl import setup_tools as st
+    host_src = tmp_path / "bundle" / "host"
+    host_src.mkdir(parents=True)
+    (host_src / "SaylHost").write_bytes(b"#!/bin/sh\n")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "bundle"), raising=False)
+    monkeypatch.setattr(st, "IS_WIN", False)
+    monkeypatch.setattr(st, "APP_DIR", str(tmp_path / "app"))
+    monkeypatch.setattr(st, "_app_version", lambda: "9.9.9")
+    p = st.host_command()
+    assert p.endswith("SaylHost-9.9.9") and os.access(p, os.X_OK)
+    (tmp_path / "app" / "SaylHost-1.0.0").write_bytes(b"old")
+    st.host_command()
+    assert not os.path.exists(tmp_path / "app" / "SaylHost-1.0.0")      # الإصدار القديم يُحذف

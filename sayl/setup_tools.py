@@ -103,6 +103,7 @@ def export_firefox(config, dest=None):
 def find_firefox():
     cands = [os.path.join(os.environ.get(v, ""), "Mozilla Firefox", "firefox.exe")
              for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+    cands.append("/Applications/Firefox.app/Contents/MacOS/firefox")
     return next((p for p in cands if os.path.isfile(p)), None) or shutil.which("firefox")
 
 
@@ -118,13 +119,31 @@ def open_firefox_debug():
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+IS_WIN = sys.platform.startswith("win")
+IS_MAC = sys.platform == "darwin"
+_LA_PATH = os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents", "com.sayl.app.plist")
+_XDG_AUTOSTART = os.path.join(os.path.expanduser("~"), ".config", "autostart", "sayl.desktop")
+_XDG_APPS = os.path.join(os.path.expanduser("~"), ".local", "share", "applications")
+
+
 def autostart_supported():
-    return sys.platform.startswith("win") and bool(getattr(sys, "frozen", False))
+    """تشغيل تلقائي مع النظام: ويندوز (سجل)، ماك (LaunchAgent)، لينكس (autostart/.desktop) للنسخة المُغلَّفة."""
+    return bool(getattr(sys, "frozen", False)) and (IS_WIN or IS_MAC or sys.platform.startswith("linux"))
+
+
+def _desktop_entry(exec_line, mime=""):
+    return ("[Desktop Entry]\nType=Application\nName=Sayl\nComment=Sayl download manager\n"
+            f"Exec={exec_line}\nTerminal=false\nCategories=Network;FileTransfer;\n"
+            + (f"MimeType={mime}\n" if mime else ""))
 
 
 def autostart_enabled():
     if not autostart_supported():
         return False
+    if IS_MAC:
+        return os.path.isfile(_LA_PATH)
+    if not IS_WIN:
+        return os.path.isfile(_XDG_AUTOSTART)
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as k:
@@ -137,6 +156,25 @@ def autostart_enabled():
 def set_autostart(on):
     if not autostart_supported():
         return False
+    if IS_MAC:
+        if on:
+            os.makedirs(os.path.dirname(_LA_PATH), exist_ok=True)
+            with open(_LA_PATH, "w", encoding="utf-8") as f:
+                f.write('<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+                        '<key>Label</key><string>com.sayl.app</string>'
+                        f'<key>ProgramArguments</key><array><string>{sys.executable}</string>'
+                        '<string>--minimized</string></array><key>RunAtLoad</key><true/></dict></plist>\n')
+        elif os.path.isfile(_LA_PATH):
+            os.remove(_LA_PATH)
+        return True
+    if not IS_WIN:
+        if on:
+            os.makedirs(os.path.dirname(_XDG_AUTOSTART), exist_ok=True)
+            with open(_XDG_AUTOSTART, "w", encoding="utf-8") as f:
+                f.write(_desktop_entry(f'"{sys.executable}" --minimized'))
+        elif os.path.isfile(_XDG_AUTOSTART):
+            os.remove(_XDG_AUTOSTART)
+        return True
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
@@ -157,9 +195,16 @@ def _torrent_cmd():
     return f'"{sys.executable}" "%1"'
 
 
+def torrent_assoc_supported():
+    """ربط magnet/.torrent: ويندوز (سجل) ولينكس (xdg-mime). غير متاح على ماك (يحتاج توقيع التطبيق)."""
+    return bool(getattr(sys, "frozen", False)) and (IS_WIN or sys.platform.startswith("linux"))
+
+
 def torrent_assoc_enabled():
-    if not autostart_supported():
+    if not torrent_assoc_supported():
         return False
+    if not IS_WIN:
+        return os.path.isfile(os.path.join(_XDG_APPS, "sayl.desktop"))
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _CLS + r"\magnet\shell\open\command") as k:
@@ -170,8 +215,24 @@ def torrent_assoc_enabled():
 
 def set_torrent_assoc(on):
     """يجعل سيل يفتح روابط magnet وملفات .torrent (على مستوى المستخدم الحالي دون صلاحيات إدارة)."""
-    if not autostart_supported():
+    if not torrent_assoc_supported():
         return False
+    if not IS_WIN:
+        import subprocess
+        path = os.path.join(_XDG_APPS, "sayl.desktop")
+        if on:
+            os.makedirs(_XDG_APPS, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_desktop_entry(f'"{sys.executable}" %u',
+                                       "x-scheme-handler/magnet;application/x-bittorrent;"))
+            for mt in ("x-scheme-handler/magnet", "application/x-bittorrent"):
+                try:
+                    subprocess.run(["xdg-mime", "default", "sayl.desktop", mt], timeout=10, check=False)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        elif os.path.isfile(path):
+            os.remove(path)
+        return True
     import winreg
     H = winreg.HKEY_CURRENT_USER
     if not on:
@@ -242,6 +303,14 @@ def _win_paths(*rels):
     return out
 
 
+MAC_APPS = {
+    "chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "edge": "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "brave": "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    "opera": "/Applications/Opera.app/Contents/MacOS/Opera",
+    "vivaldi": "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
+}
+
 BROWSERS = [
     ("chrome", "Google Chrome", "chrome", ("Google/Chrome/Application/chrome.exe",), "google-chrome"),
     ("edge", "Microsoft Edge", "edge", ("Microsoft/Edge/Application/msedge.exe",), "microsoft-edge"),
@@ -256,6 +325,7 @@ def find_browsers():
     out = []
     for key, name, scheme, rels, cmd in BROWSERS:
         exe = next((p for p in _win_paths(*rels) if os.path.isfile(p)), None)
+        exe = exe or (MAC_APPS.get(key) if IS_MAC and os.path.isfile(MAC_APPS.get(key, "")) else None)
         exe = exe or shutil.which(cmd)
         out.append({"key": key, "name": name, "scheme": scheme, "exe": exe})
     return out
@@ -285,15 +355,19 @@ def extension_id():
 def host_command():
     """مسار ملف تنفيذي يشغّل الجسر: SaylHost.exe في النسخة المُغلَّفة، أو سكربت صغير أثناء التطوير."""
     if getattr(sys, "frozen", False):
-        src = resource_path(os.path.join("host", "SaylHost.exe"))
+        ext = ".exe" if IS_WIN else ""
+        src = resource_path(os.path.join("host", "SaylHost" + ext))
         # اسم يحمل الإصدار: ملف الجسر القديم قد يكون قيد التشغيل (مقفلًا) فلا يمكن الكتابة فوقه
-        dst = os.path.join(APP_DIR, f"SaylHost-{_app_version()}.exe")
+        dst = os.path.join(APP_DIR, f"SaylHost-{_app_version()}{ext}")
         if os.path.isfile(src):
             os.makedirs(APP_DIR, exist_ok=True)
             if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(src):
                 shutil.copyfile(src, dst)
+                if not IS_WIN:
+                    os.chmod(dst, 0o755)
             for n in os.listdir(APP_DIR):
-                if n.startswith("SaylHost") and n.endswith(".exe") and n != os.path.basename(dst):
+                if n.startswith("SaylHost") and n != os.path.basename(dst) and \
+                        (n.endswith(".exe") if IS_WIN else not n.endswith(".exe")):
                     try:
                         os.remove(os.path.join(APP_DIR, n))
                     except OSError:
@@ -315,8 +389,14 @@ def host_command():
 
 def _nm_dirs_posix():
     home = os.path.expanduser("~")
-    cands = [".config/google-chrome", ".config/chromium", ".config/microsoft-edge",
-             ".config/BraveSoftware/Brave-Browser", ".config/vivaldi", ".config/opera"]
+    if IS_MAC:
+        cands = ["Library/Application Support/Google/Chrome", "Library/Application Support/Chromium",
+                 "Library/Application Support/Microsoft Edge",
+                 "Library/Application Support/BraveSoftware/Brave-Browser",
+                 "Library/Application Support/Vivaldi", "Library/Application Support/com.operasoftware.Opera"]
+    else:
+        cands = [".config/google-chrome", ".config/chromium", ".config/microsoft-edge",
+                 ".config/BraveSoftware/Brave-Browser", ".config/vivaldi", ".config/opera"]
     return [os.path.join(home, c, "NativeMessagingHosts") for c in cands
             if os.path.isdir(os.path.join(home, c))]
 
@@ -364,7 +444,9 @@ def register_native_host(config=None, extra_dirs=None, registry=True):
             shutil.copyfile(main_path, p)
             written.append(p)
         if registry:
-            ffd = os.path.join(os.path.expanduser("~"), ".mozilla", "native-messaging-hosts")
+            ffd = (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Mozilla",
+                                "NativeMessagingHosts") if IS_MAC else
+                   os.path.join(os.path.expanduser("~"), ".mozilla", "native-messaging-hosts"))
             os.makedirs(ffd, exist_ok=True)
             p = os.path.join(ffd, f"{HOST_NAME}.json")
             shutil.copyfile(ff_path, p)
@@ -416,6 +498,10 @@ def native_status():
         except OSError:
             ok = False
         out.append(("مسجّل في Firefox" if ok else "غير مسجّل في Firefox", ok))
+    else:
+        found = [d for d in _nm_dirs_posix() if os.path.isfile(os.path.join(d, f"{HOST_NAME}.json"))]
+        if found:                      # لا نُظهر خطأً إن لم يوجد متصفح مثبّت أصلًا
+            out.append((f"مسجّل في {len(found)} متصفح", True))
     return out
 
 

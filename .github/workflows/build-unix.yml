@@ -1,0 +1,77 @@
+name: Build macOS and Linux
+
+# يعمل بعد نجاح بناء ويندوز: يبني نسختي ماك ولينكس ويرفقهما بالإصدار نفسه.
+# فشل هذا الملف لا يؤثر على إصدار ويندوز.
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Build and release Sayl.exe"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  unix:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: Sayl-macOS-arm64.zip
+          - os: ubuntu-22.04
+            asset: Sayl-Linux-x86_64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Read version and check release
+        id: v
+        shell: bash
+        run: |
+          ver=$(python3 -c "import re;print(re.search(r'\"([^\"]+)\"',open('sayl/__init__.py').read()).group(1))")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if gh release view "v$ver" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "${{ matrix.asset }}"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.v.outputs.skip == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.v.outputs.skip == 'false' && runner.os == 'Linux'
+        name: Qt system libraries (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libdbus-1-3
+      - if: steps.v.outputs.skip == 'false'
+        run: pip install -r requirements.txt pyinstaller pillow
+      - if: steps.v.outputs.skip == 'false'
+        name: Build native host
+        run: pyinstaller --noconfirm --clean --onefile --console --name SaylHost run_host.py
+      - if: steps.v.outputs.skip == 'false' && runner.os == 'Linux'
+        name: Build app (Linux)
+        run: |
+          pyinstaller --noconfirm --onefile --name Sayl --add-data "extension:extension" \
+            --add-data "dist/SaylHost:host" --collect-all yt_dlp --collect-all Cryptodome \
+            --collect-all libtorrent run_sayl.py
+          tar -czf "${{ matrix.asset }}" -C dist Sayl
+      - if: steps.v.outputs.skip == 'false' && runner.os == 'macOS'
+        name: Build app (macOS)
+        run: |
+          pyinstaller --noconfirm --windowed --name Sayl --icon assets/icon.png \
+            --osx-bundle-identifier com.sayl.app --add-data "extension:extension" \
+            --add-data "dist/SaylHost:host" --collect-all yt_dlp --collect-all Cryptodome \
+            --collect-all libtorrent run_sayl.py
+          ditto -c -k --keepParent dist/Sayl.app "${{ matrix.asset }}"
+      - if: steps.v.outputs.skip == 'false'
+        name: Upload to release
+        run: gh release upload "v${{ steps.v.outputs.version }}" "${{ matrix.asset }}" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

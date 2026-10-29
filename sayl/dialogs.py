@@ -1909,7 +1909,8 @@ class SettingsDialog(QDialog):
         self.clip.setChecked(c["clipboard_watch"])
         self.notify = QCheckBox("إشعار عند اكتمال التحميل")
         self.notify.setChecked(c["notify"])
-        self.autostart = QCheckBox("تشغيل سيل تلقائيًا مع ويندوز (يعمل في الخلفية)")
+        self.autostart = QCheckBox("تشغيل سيل تلقائيًا مع %s (يعمل في الخلفية)" % (
+            "ويندوز" if sys.platform.startswith("win") else "ماك" if sys.platform == "darwin" else "النظام"))
         self.autostart.setChecked(setup_tools.autostart_enabled())
         self.autostart.setVisible(setup_tools.autostart_supported())
         self.watch = QCheckBox("مراقبة مجلد: أي ملف .txt أو .url فيه روابط يُحمَّل تلقائيًا")
@@ -1960,12 +1961,12 @@ class SettingsDialog(QDialog):
         hk_row.addWidget(self.hk_on)
         hk_row.addWidget(self.hk_key)
         hk_row.addStretch(1)
-        self.hk_on.setVisible(setup_tools.autostart_supported() or sys.platform.startswith("win"))
+        self.hk_on.setVisible(sys.platform.startswith("win"))
         self.hk_key.setVisible(self.hk_on.isVisible())
         f.addRow("", hk_row)
         self.tor_assoc = QCheckBox("فتح روابط magnet وملفات .torrent بسيل (عند الضغط عليها خارج المتصفح)")
         self.tor_assoc.setChecked(setup_tools.torrent_assoc_enabled())
-        self.tor_assoc.setVisible(setup_tools.autostart_supported())
+        self.tor_assoc.setVisible(setup_tools.torrent_assoc_supported())
         f.addRow("", self.tor_assoc)
         f.addRow("", self.watch)
         f.addRow("المجلد المراقَب", wrow)
@@ -2561,7 +2562,7 @@ class SettingsDialog(QDialog):
         c["hotkey_enabled"] = self.hk_on.isChecked()
         if _hk.parse(self.hk_key.text()):
             c["hotkey"] = self.hk_key.text().strip()
-        if setup_tools.autostart_supported() and self.tor_assoc.isChecked() != setup_tools.torrent_assoc_enabled():
+        if setup_tools.torrent_assoc_supported() and self.tor_assoc.isChecked() != setup_tools.torrent_assoc_enabled():
             try:
                 setup_tools.set_torrent_assoc(self.tor_assoc.isChecked())
             except OSError:

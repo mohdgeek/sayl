@@ -4,7 +4,8 @@ import tempfile
 
 from . import icons
 
-BASE_FONT = '"Segoe UI Variable Text","Segoe UI","Tahoma","Noto Sans Arabic","DejaVu Sans",sans-serif'
+BASE_FONT = ('"Segoe UI Variable Text","Segoe UI","Helvetica Neue","Geeza Pro","Tahoma",'
+             '"Noto Sans Arabic","Noto Naskh Arabic","DejaVu Sans",sans-serif')
 
 FONT = BASE_FONT
 
