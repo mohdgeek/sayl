@@ -482,8 +482,8 @@ class MediaDownload:
             self.state = DOWNLOADING
 
     def _out_dir(self):
-        if not self.subfolder:
-            return self.dest_dir
+        if not self.subfolder or os.path.basename(os.path.normpath(self.dest_dir)) in LABELS.values():
+            return self.dest_dir        # لا نكرّر مجلد النوع داخل مجلد النوع نفسه
         return os.path.join(self.dest_dir, LABELS["audio" if self.audio_only else "video"])
 
     def _build_opts(self, log):
@@ -654,12 +654,13 @@ class MediaDownload:
                 raise DownloadCancelled()
             if path and os.path.exists(path) and self._tmp:
                 path = self._move_from_tmp(path, info)
-            if path and os.path.exists(path):
-                self.filename = os.path.basename(path)
-                self.final_dir = os.path.dirname(path)
-                self.size = os.path.getsize(path)
-                if self.subs:
-                    clean_subtitles_for(self.final_dir, os.path.splitext(self.filename)[0])
+            if not (path and os.path.exists(path)):
+                raise RuntimeError("لم يُحمَّل أي ملف: قد لا يكون الرابط صفحة فيديو")
+            self.filename = os.path.basename(path)
+            self.final_dir = os.path.dirname(path)
+            self.size = os.path.getsize(path)
+            if self.subs:
+                clean_subtitles_for(self.final_dir, os.path.splitext(self.filename)[0])
             self.state = COMPLETED
 
 

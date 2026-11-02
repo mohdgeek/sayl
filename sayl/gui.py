@@ -38,6 +38,7 @@ class Bridge(QObject):
     hashed = Signal(str, str)    # (اسم الملف، SHA-256)
     confirm = Signal(str, object, str, object)   # (الرابط، الترويسات، النوع) من الإضافة: اعرض نافذة الخيارات
     hotkey = Signal()            # من خيط الاختصار العام
+    show_win = Signal()          # تشغيل ثانٍ للبرنامج: أظهر النافذة
     incoming = Signal(object, object)   # (معلومات ملف وارد، حامل الإجابة) من خادم الاستقبال
     received = Signal(object)    # اكتمل استلام ملف من جهاز آخر
     upd_found = Signal(object)   # إصدار أحدث متوفر (معلوماته)
@@ -1046,6 +1047,7 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+        _force_foreground(self)
 
     def closeEvent(self, e):
         if self.tray.isVisible():
@@ -1065,7 +1067,6 @@ class MainWindow(QMainWindow):
 def main():
     setup_tools.install_excepthook()
     from . import __version__ as _v
-    setup_tools.log(f"سيل {_v} بدأ")
     app = QApplication(sys.argv)
     app.setLayoutDirection(Qt.RightToLeft)
     app.setQuitOnLastWindowClosed(False)
@@ -1077,8 +1078,11 @@ def main():
     if not lock.tryLock(100):
         if cli_items and all(setup_tools.forward_to_running(config, a) for a in cli_items):
             return
+        if not cli_items and setup_tools.show_running(config):
+            return
         QMessageBox.information(None, "سيل", "سيل يعمل بالفعل. ابحث عن أيقونته بجانب الساعة.")
         return
+    setup_tools.log(f"سيل {_v} بدأ")
     try:
         from . import fonts
         setup_tools.log("الخط: " + (", ".join(fonts.apply(config)) or "ثمانية غير مثبّت (الخط الافتراضي)"))
@@ -1100,6 +1104,7 @@ def main():
     bridge.added.connect(win.on_remote_add)
     bridge.confirm.connect(win.open_confirm)
     bridge.hotkey.connect(win.on_hotkey)
+    bridge.show_win.connect(win.show_normal)
     bridge.incoming.connect(win.on_incoming)
     bridge.received.connect(win.on_received)
     win.apply_lan()
@@ -1107,7 +1112,8 @@ def main():
     win.apply_hotkey()
     try:
         server, moved = start_server(manager, config, on_add=lambda d: bridge.added.emit(d.id),
-                                   on_confirm=lambda u, h, k, o: bridge.confirm.emit(u, h, k, o))
+                                   on_confirm=lambda u, h, k, o: bridge.confirm.emit(u, h, k, o),
+                                   on_show=bridge.show_win.emit)
         if moved:
             manager.events.append(f"المنفذ {server.wanted_port} مشغول بنسخة أخرى من سيل أو برنامج آخر، "
                                   f"فاستخدمنا {server.port}. أغلق النسخ القديمة من مدير المهام.")

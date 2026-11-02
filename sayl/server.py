@@ -53,7 +53,7 @@ def _disk_token(config):
         return ""
 
 
-def make_handler(manager, config, on_add=None, on_confirm=None):
+def make_handler(manager, config, on_add=None, on_confirm=None, on_show=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "Sayl"
 
@@ -140,12 +140,16 @@ def make_handler(manager, config, on_add=None, on_confirm=None):
                 self._send(200, {"ok": False, "error": str(e)[:300]})
 
         def do_POST(self):
-            if self.path not in ("/add", "/probe"):
+            if self.path not in ("/add", "/probe", "/show"):
                 return self._send(404, {"ok": False})
             if not self._check():
                 return
             if self.path == "/probe":
                 return self._probe()
+            if self.path == "/show":             # تشغيل ثانٍ للبرنامج: أظهر النافذة العاملة
+                if on_show:
+                    on_show()
+                return self._send(200, {"ok": bool(on_show)})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
                 if n <= 0 or n > MAX_BODY:
@@ -196,18 +200,18 @@ class _Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-def start_server(manager, config, on_add=None, on_confirm=None):
+def start_server(manager, config, on_add=None, on_confirm=None, on_show=None):
     """يشغّل الخادم على المنفذ المضبوط، وإن كان مشغولًا يختار منفذًا حرًّا ويحفظه في الإعدادات.
 
     يعيد (الخادم، هل تغيّر المنفذ؟). الجسر يقرأ المنفذ من ملف الإعدادات فيتبع التغيير تلقائيًا.
     """
     wanted = int(config["port"])
     try:
-        srv = ApiServer(manager, config, on_add, on_confirm)
+        srv = ApiServer(manager, config, on_add, on_confirm, on_show)
         fell_back = False
     except OSError:
         config["port"] = 0
-        srv = ApiServer(manager, config, on_add, on_confirm)
+        srv = ApiServer(manager, config, on_add, on_confirm, on_show)
         config["port"] = srv.port
         config.save()
         fell_back = True
@@ -217,9 +221,9 @@ def start_server(manager, config, on_add=None, on_confirm=None):
 
 
 class ApiServer:
-    def __init__(self, manager, config, on_add=None, on_confirm=None):
+    def __init__(self, manager, config, on_add=None, on_confirm=None, on_show=None):
         self.httpd = _Server(("127.0.0.1", int(config["port"])),
-                             make_handler(manager, config, on_add, on_confirm))
+                             make_handler(manager, config, on_add, on_confirm, on_show))
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     @property

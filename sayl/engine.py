@@ -20,6 +20,8 @@ CHUNK = 64 * 1024
 MIN_SPLIT = 512 * 1024      # أصغر جزء يمكن تقسيمه
 MAX_RETRIES = 6
 META_EXT = ".sayl"
+_TINY_BODY = 1024           # ردّ أصغر من هذا غالبًا رسالة خطأ من الخادم لا ملف
+_PAGE_EXTS = {"html", "htm", "xhtml", "php", "asp", "aspx", "jsp"}
 
 QUEUED, PROBING, DOWNLOADING, PAUSED, COMPLETED, ERROR, CANCELED = (
     "queued", "probing", "downloading", "paused", "completed", "error", "canceled")
@@ -530,6 +532,13 @@ class Download:
             if self._stop.is_set() and not any(t.is_alive() for t in threads):
                 break
             if (not self._stop.is_set() and self.downloaded == base and now - began > self.STALL_SECS):
+                if base > 0:
+                    # استئناف بلا بيانات: نحتفظ بما حُمِّل ونعيد المحاولة لاحقًا بدل حذفه والبدء من الصفر.
+                    self._seg_stop.set()
+                    for t in threads:
+                        t.join(timeout=20)
+                    self._save_meta()
+                    raise IOError(f"timed out: لا بايتات خلال {self.STALL_SECS}ث عند الاستئناف")
                 # لم يصل أي بايت (الخادم يرفض الاتصالات المتعددة، أو الكتابة البعيدة عالقة على القرص):
                 # نترك الخيوط العالقة ونكمل باتصال واحد في ملف جديد يُكتب بالتسلسل.
                 self._seg_stop.set()
@@ -585,6 +594,10 @@ class Download:
         if errors:
             self._stop.clear()
             if isinstance(errors[0], NoRangeError):
+                if self.downloaded > 0:
+                    # وضع الاتصال الواحد يكتب من الصفر فوق الملف الجزئي: لا نضيّع التقدّم بلا علم المستخدم.
+                    raise IOError("رفض الخادم استئناف التحميل، وما حُمِّل محفوظ. أعد المحاولة لاحقًا، "
+                                  "أو احذف العنصر مع ملفاته وأضف الرابط من جديد إن كان الملف قد تغيّر")
                 self.resumable, self.segments = False, []
                 try:
                     os.remove(self._tmp + ".json")
@@ -604,10 +617,16 @@ class Download:
                                timeout=(10, 30)) as r:
             if r.status_code >= 400:
                 raise IOError(f"HTTP {r.status_code}")
+            cl = r.headers.get("Content-Length")
+            # مع الضغط يختلف Content-Length عن حجم البيانات بعد فكّها
+            expected = int(cl) if cl and cl.isdigit() and not r.headers.get("Content-Encoding") else None
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            head = b""
             with open(self._tmp, "wb") as f:
                 for chunk in r.iter_content(CHUNK):
                     if self._stop.is_set():
                         return
+                    head = head or chunk
                     self.limiter.acquire(len(chunk))
                     f.write(chunk)
                     self.single_bytes += len(chunk)
@@ -616,8 +635,30 @@ class Download:
                         inst = (self.single_bytes - last_bytes) / (now - last_t)
                         self.speed = inst if self.speed == 0 else 0.6 * self.speed + 0.4 * inst
                         last_bytes, last_t = self.single_bytes, now
+        if expected is not None and self.single_bytes != expected:
+            raise IOError("connection error: انقطع الاتصال قبل اكتمال الملف")
+        issue = self._bad_body(ctype, head)
+        if issue:
+            try:
+                os.remove(self._tmp)
+            except OSError:
+                pass
+            raise IOError(issue)
         if self.size is None:
             self.size = self.single_bytes
+
+    def _bad_body(self, ctype, head):
+        """رسالة الخطأ إن كان الردّ صفحة ويب أو رسالة قصيرة من الخادم بدل الملف المطلوب، وإلا None."""
+        ext = os.path.splitext(self.filename or "")[1].lstrip(".").lower()
+        if (ctype == "text/html" and ext not in _PAGE_EXTS
+                and head.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html"))):
+            return "أرجع الخادم صفحة ويب بدل الملف: قد يكون الرابط منتهيًا أو يتطلب تسجيل الدخول"
+        if self.single_bytes < _TINY_BODY:
+            media = (ctype.startswith(("video/", "audio/"))
+                     or os.path.basename(urllib.parse.urlparse(self.final_url).path) == "videoplayback")
+            if media or (not ext and not ctype.startswith("text/")):
+                return "أرجع الخادم ردًّا قصيرًا بدل الملف: قد يكون الرابط منتهيًا، خذ رابطًا جديدًا"
+        return None
 
     def _finish(self):
         if self.resumable and self.size and os.path.getsize(self._tmp) < self.size:

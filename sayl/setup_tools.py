@@ -274,8 +274,22 @@ def forward_to_running(config, url):
         return False
 
 
+def show_running(config):
+    """يطلب من نسخة سيل العاملة إظهار نافذتها. يعيد True عند النجاح."""
+    import json
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{int(config['port'])}/show", data=b"{}",
+            headers={"Content-Type": "application/json", "X-Sayl-Token": config["token"]})
+        with urllib.request.urlopen(req, timeout=4) as r:
+            return bool(json.loads(r.read()).get("ok"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ------------------------------------------------------------ السجل
-LOG_PATH = os.path.join(APP_DIR, "sayl.log")
+LOG_PATH =os.path.join(APP_DIR, "sayl.log")
 
 
 def install_excepthook():
